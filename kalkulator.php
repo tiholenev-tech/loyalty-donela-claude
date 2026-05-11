@@ -1256,12 +1256,13 @@ body::before{
 }
 /* ═══════════════════════════════════════════════════════════════
    S6 STICKY NUMPAD (от sale.php pattern)
-   Sticky bottom — винаги видим. Заменя native клавиатура.
+   Sticky bottom — collapsible. Скрит по default, отваря се при тап на полета.
    ═══════════════════════════════════════════════════════════════ */
 .f-input[readonly]{caret-color:transparent;cursor:pointer}
 
-/* Дай padding bottom на body за numpad-а да не покрива съдържание */
-body{padding-bottom:340px !important}
+/* Body padding динамично — JS променя при open/close */
+body.lp-keypad-open{padding-bottom:340px !important}
+body{transition:padding-bottom .25s ease}
 
 .lp-numpad-zone{
   position:fixed;bottom:0;left:0;right:0;z-index:500;
@@ -1269,17 +1270,37 @@ body{padding-bottom:340px !important}
   border-top:1px solid rgba(99,102,241,.25);
   padding:8px 8px calc(12px + env(safe-area-inset-bottom,0px));
   backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  transform:translateY(100%);transition:transform .25s ease;
 }
-.lp-numpad-ctx{
+.lp-numpad-zone.lp-open{transform:translateY(0)}
+
+/* Toggle pin (винаги видим — отваря numpad) */
+.lp-keypad-toggle{
+  position:fixed;bottom:8px;right:8px;z-index:600;
+  width:54px;height:54px;border-radius:50%;border:none;cursor:pointer;
+  background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;
   display:flex;align-items:center;justify-content:center;
-  margin-bottom:6px;height:22px;
+  box-shadow:0 8px 24px rgba(99,102,241,.5);
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  transition:transform .25s ease;
+}
+.lp-keypad-toggle.lp-hidden{transform:scale(0)}
+
+.lp-numpad-head{
+  display:flex;align-items:center;gap:8px;margin-bottom:6px;
 }
 .lp-ctx-label{
   font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
-  padding:3px 12px;border-radius:6px;
+  padding:3px 12px;border-radius:6px;flex:1;text-align:center;
 }
 .lp-ctx-code{background:rgba(99,102,241,.18);color:#a5b4fc}
 .lp-ctx-price{background:rgba(34,197,94,.18);color:#4ade80}
+.lp-close-btn{
+  width:30px;height:30px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(248,113,113,.15);color:#f87171;
+  display:flex;align-items:center;justify-content:center;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
 
 .lp-parked-bar{
   display:flex;align-items:center;gap:8px;padding:6px 12px;margin-bottom:6px;
@@ -1292,7 +1313,7 @@ body{padding-bottom:340px !important}
 .lp-parked-list{
   display:none;flex-direction:column;gap:4px;padding:6px;margin-bottom:6px;
   background:rgba(232,184,0,.06);border:1px solid rgba(232,184,0,.2);border-radius:10px;
-  max-height:120px;overflow-y:auto;
+  max-height:140px;overflow-y:auto;
 }
 .lp-parked-list.open{display:flex}
 .lp-parked-row{
@@ -2839,9 +2860,32 @@ setTimeout(restoreSessionState, 200);
     if(navigator.vibrate) try { navigator.vibrate(6); } catch(e){}
   };
 
-  /* Tap на поле → set ctx */
-  if(codeInput) codeInput.addEventListener('click', () => lpSetCtx('code'));
-  if(priceInput) priceInput.addEventListener('click', () => lpSetCtx('price'));
+  /* ═══ OPEN / CLOSE KEYPAD ═══ */
+  window.lpOpenKeypad = function(){
+    document.getElementById('lpNumpadZone').classList.add('lp-open');
+    document.getElementById('lpKeypadToggle').classList.add('lp-hidden');
+    document.body.classList.add('lp-keypad-open');
+  };
+  window.lpCloseKeypad = function(){
+    document.getElementById('lpNumpadZone').classList.remove('lp-open');
+    document.getElementById('lpKeypadToggle').classList.remove('lp-hidden');
+    document.body.classList.remove('lp-keypad-open');
+  };
+
+  /* Tap на поле → set ctx + open keypad */
+  if(codeInput){
+    codeInput.addEventListener('click', () => { lpSetCtx('code'); lpOpenKeypad(); });
+  }
+  if(priceInput){
+    priceInput.addEventListener('click', () => {
+      if(!codeInput.value.trim()){
+        if(typeof flash === 'function') flash(codeInput);
+        lpSetCtx('code'); lpOpenKeypad();
+        return;
+      }
+      lpSetCtx('price'); lpOpenKeypad();
+    });
+  }
 
   /* Initial */
   setTimeout(() => lpSetCtx('code'), 100);
@@ -2941,6 +2985,11 @@ setTimeout(restoreSessionState, 200);
     saveP(arr);
     renderBar();
     renderList();
+    /* S6 FIX: затвори клавиатурата + scroll до върха да се види списъка */
+    lpCloseKeypad();
+    setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 300);
   }
   function delOne(idx){
     const arr = loadP();
@@ -2970,11 +3019,20 @@ setTimeout(restoreSessionState, 200);
 
 </script>
 <!-- ═══════════════════════════════════════════════════════════════
-     S6 STICKY NUMPAD (от sale.php pattern) — заменя native клавиатура
+     S6 STICKY NUMPAD (collapsible) — от sale.php pattern
      ═══════════════════════════════════════════════════════════════ -->
+
+<!-- Floating toggle FAB (винаги видим когато numpad е скрит) -->
+<button class="lp-keypad-toggle" id="lpKeypadToggle" onclick="lpOpenKeypad()" aria-label="Отвори клавиатура">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M7 10h0M11 10h0M15 10h0M7 14h10"/></svg>
+</button>
+
 <div class="lp-numpad-zone" id="lpNumpadZone">
-  <div class="lp-numpad-ctx">
+  <div class="lp-numpad-head">
     <span class="lp-ctx-label lp-ctx-code" id="lpCtxLabel">КОД</span>
+    <button class="lp-close-btn" onclick="lpCloseKeypad()" aria-label="Затвори">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
   </div>
   <div class="lp-parked-bar" id="lpParkedBar" style="display:none" onclick="lpTogglePark()">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
