@@ -1622,6 +1622,7 @@ async function autoFillFromCode(code){
     const _curPrice = parseFloat(priceInput.value) || 0;
     if(data.price && _curPrice <= 0){
       priceInput.value = parseFloat(data.price).toFixed(2);
+      priceInput.dataset.autofilled = '1';
       priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
       setTimeout(() => { priceInput.style.background = ''; }, 1500);
     }
@@ -1633,6 +1634,7 @@ async function autoFillFromCode(code){
         if(brandSelect.options[i].text === data.brand || brandSelect.options[i].value === data.brand){
           brandSelect.selectedIndex = i;
           brandSelect.classList.add('chosen');
+          brandSelect.dataset.autofilled = '1';
           brandSet = ' + ' + data.brand;
           break;
         }
@@ -1664,9 +1666,33 @@ codeInput.addEventListener('keydown', e => {
 /* Trigger 3: debounced при input (като пише — 600ms след спирането) */
 let _lookupTimer = null;
 codeInput.addEventListener('input', () => {
+  /* S9.CLEAR: ако код стане празен → изчисти auto-filled полета */
+  if(!codeInput.value.trim()){
+    if(priceInput.dataset.autofilled === '1'){
+      priceInput.value = '';
+      delete priceInput.dataset.autofilled;
+    }
+    if(brandSelect && brandSelect.dataset.autofilled === '1'){
+      brandSelect.value = '';
+      brandSelect.classList.remove('chosen');
+      delete brandSelect.dataset.autofilled;
+    }
+    if(_lookupTimer) clearTimeout(_lookupTimer);
+    return;
+  }
   if(_lookupTimer) clearTimeout(_lookupTimer);
   _lookupTimer = setTimeout(() => autoFillFromCode(codeInput.value), 600);
 });
+
+/* S9.MANUAL: при ръчна промяна на цена/марка → маркер че не е auto-fill */
+priceInput.addEventListener('input', () => {
+  if(priceInput.dataset.autofilled === '1') delete priceInput.dataset.autofilled;
+});
+if(brandSelect){
+  brandSelect.addEventListener('change', () => {
+    if(brandSelect.dataset.autofilled === '1') delete brandSelect.dataset.autofilled;
+  });
+}
 
 /* ── Добави артикул ── */
 function flash(el){ el.style.borderColor='var(--red)'; el.style.background='#fff5f5'; setTimeout(()=>{ el.style.borderColor=''; el.style.background=''; }, 1200); }
