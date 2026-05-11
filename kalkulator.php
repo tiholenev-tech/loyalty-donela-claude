@@ -1571,6 +1571,77 @@ priceInput.addEventListener('keydown', e => {
 
 brandSelect.addEventListener('change', () => brandSelect.classList.toggle('chosen', !!brandSelect.value));
 
+/* ═══════════════════════════════════════════════════
+   S9 AUTO-FILL: при загуба на фокус на код → AJAX lookup_code
+   → попълва цена + марка от item_memory история
+   ═══════════════════════════════════════════════════ */
+let _lookupAbortCtrl = null;
+async function autoFillFromCode(code){
+  code = String(code||'').trim();
+  if(!code) return;
+  /* Skip ако цена вече е въведена (не пиши върху ръчно въведена) */
+  const currentPrice = parseFloat(priceInput.value);
+  if(currentPrice > 0) return;
+
+  /* Cancel предишен заявка ако още е активна */
+  if(_lookupAbortCtrl) { try { _lookupAbortCtrl.abort(); } catch(e){} }
+  _lookupAbortCtrl = new AbortController();
+
+  try {
+    const res = await fetch('lookup_code.php?code=' + encodeURIComponent(code), {
+      credentials: 'same-origin',
+      signal: _lookupAbortCtrl.signal
+    });
+    if(!res.ok) return;
+    const data = await res.json();
+    if(!data || !data.ok) return;
+
+    /* Auto-fill цена (само ако още е празна) */
+    if(data.price && parseFloat(priceInput.value) <= 0){
+      priceInput.value = parseFloat(data.price).toFixed(2);
+      /* Visual hint че е auto-filled */
+      priceInput.style.background = 'rgba(76, 175, 80, 0.08)';
+      setTimeout(() => { priceInput.style.background = ''; }, 1500);
+    }
+
+    /* Auto-fill марка (само ако още няма избрана) */
+    if(data.brand && brandSelect && !brandSelect.value){
+      /* Намери option с този текст */
+      for(let i = 0; i < brandSelect.options.length; i++){
+        if(brandSelect.options[i].text === data.brand || brandSelect.options[i].value === data.brand){
+          brandSelect.selectedIndex = i;
+          brandSelect.classList.add('chosen');
+          break;
+        }
+      }
+    }
+
+    /* Трик: ако sticky preview е активен → re-render */
+    if(typeof updateStickyLive === 'function') updateStickyLive();
+  } catch(err){
+    /* Silent — auto-fill не е критичен */
+    if(err.name !== 'AbortError') console.warn('lookup_code:', err);
+  }
+}
+
+/* Trigger 1: при blur на code input (касиерка отстъпва от полето) */
+codeInput.addEventListener('blur', () => autoFillFromCode(codeInput.value));
+
+/* Trigger 2: при Enter в code input (преди да focus-не price) */
+codeInput.addEventListener('keydown', e => {
+  if(e.key === 'Enter'){
+    /* Auto-fill преди focus-а върху price */
+    autoFillFromCode(codeInput.value);
+  }
+});
+
+/* Trigger 3: debounced при input (като пише — 600ms след спирането) */
+let _lookupTimer = null;
+codeInput.addEventListener('input', () => {
+  if(_lookupTimer) clearTimeout(_lookupTimer);
+  _lookupTimer = setTimeout(() => autoFillFromCode(codeInput.value), 600);
+});
+
 /* ── Добави артикул ── */
 function flash(el){ el.style.borderColor='var(--red)'; el.style.background='#fff5f5'; setTimeout(()=>{ el.style.borderColor=''; el.style.background=''; }, 1200); }
 
