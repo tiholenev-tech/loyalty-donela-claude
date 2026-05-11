@@ -1390,6 +1390,24 @@ body{transition:padding-bottom .25s ease}
   box-shadow:0 4px 12px rgba(34,197,94,.4);
 }
 
+/* S6: × close на камерата */
+.qr-close-btn{
+  position:absolute;top:8px;right:8px;z-index:10;
+  width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(0,0,0,.75);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 12px rgba(0,0,0,.4);
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+.qr-close-btn:active{background:rgba(0,0,0,.9);transform:scale(.92)}
+.qr-expanded{position:relative !important}
+
+/* S6: размяна на ред — добавените артикули отиват НАД карта секцията */
+.wrap{display:flex;flex-direction:column}
+#itemsLabel{order:-3 !important;margin-top:0 !important}
+#itemsList{order:-2 !important}
+.card-section{order:-1 !important;margin-top:8px}
+
 </style>
 </head>
 <body>
@@ -1420,6 +1438,9 @@ body{transition:padding-bottom .25s ease}
       <button type="button" class="card-btn" onclick="toggleManual()" id="manualBtn"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></svg><span>Въведи ръчно</span></button>
     </div>
     <div class="qr-expanded" id="qrExpanded">
+      <button type="button" class="qr-close-btn" onclick="closeScan()" aria-label="Затвори камерата">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
       <div id="reader"></div>
       <div class="scan-status" id="scanStatus" style="display:none"></div>
     </div>
@@ -2449,6 +2470,15 @@ function toggleManual(){
 }
 window.toggleScan=toggleScan; window.toggleManual=toggleManual;
 
+/* S6: Затвори камерата ръчно с × бутона */
+window.closeScan = function(){
+  if(typeof stopQr === 'function'){ try { stopQr(); } catch(e){} }
+  const qr = document.getElementById('qrExpanded');
+  if(qr) qr.classList.add('hidden');
+  const sbtn = document.getElementById('scanBtn');
+  if(sbtn) sbtn.classList.remove('active');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    QR СКЕНЕР — AUTO START (същия паттерн като стария scan.php)
    ═══════════════════════════════════════════════════════════════ */
@@ -2483,6 +2513,8 @@ function initQr(){
         try { beep(); } catch(e){}
         onCardEntered(card);
         setScanStatus('Сканирано: ' + card, true);
+        /* S6: auto-close camera след успешен scan (1 секунда delay за beep+visual) */
+        setTimeout(() => { if(typeof closeScan === 'function') closeScan(); }, 1000);
       },
       () => {}
     ).then(() => { if(html5QrCode) html5QrCode._isScanning = true; })
