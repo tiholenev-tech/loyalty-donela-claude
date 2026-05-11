@@ -1619,7 +1619,8 @@ async function autoFillFromCode(code){
     if(!data.ok){ s9dbg('Not found: '+(data.reason||'?'), 'rgba(150,100,0,.85)'); return; }
 
     /* Auto-fill цена */
-    if(data.price && parseFloat(priceInput.value) <= 0){
+    const _curPrice = parseFloat(priceInput.value) || 0;
+    if(data.price && _curPrice <= 0){
       priceInput.value = parseFloat(data.price).toFixed(2);
       priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
       setTimeout(() => { priceInput.style.background = ''; }, 1500);
