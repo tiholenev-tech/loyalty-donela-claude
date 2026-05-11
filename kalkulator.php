@@ -226,7 +226,7 @@ if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $r->execute(['cid' => $customerId]);
         }
 
-        /* ── 4. UPSERT в item_memory (auto-fill памет за следващи продажби) ── */
+        /* ── 4. UPSERT в item_memory + item_variants (auto-fill памет) ── */
         try {
             $um = $pdo->prepare("INSERT INTO item_memory (code, price, brand, last_seen, use_count)
                 VALUES (:code, :price, :brand, NOW(), 1)
@@ -235,15 +235,20 @@ if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     brand = COALESCE(NULLIF(VALUES(brand),''), brand),
                     last_seen = NOW(),
                     use_count = use_count + 1");
+            $uv = $pdo->prepare("INSERT INTO item_variants (code, brand, price, use_count, last_seen)
+                VALUES (:code, :brand, :price, 1, NOW())
+                ON DUPLICATE KEY UPDATE
+                    use_count = use_count + 1,
+                    last_seen = NOW()");
             foreach ($items as $it) {
                 $code  = trim((string)($it['code']  ?? ''));
                 $price = round((float)($it['price'] ?? 0), 2);
                 $brand = trim((string)($it['brand'] ?? ''));
                 if ($code === '' || $price <= 0) continue;
                 $um->execute(['code' => $code, 'price' => $price, 'brand' => $brand ?: null]);
+                $uv->execute(['code' => $code, 'brand' => $brand, 'price' => $price]);
             }
         } catch (Throwable $e) {
-            // item_memory грешки не са fatal — лог + продължи
             error_log('kalkulator.save item_memory: ' . $e->getMessage());
         }
 
@@ -1573,7 +1578,8 @@ brandSelect.addEventListener('change', () => brandSelect.classList.toggle('chose
 
 /* ═══════════════════════════════════════════════════
    S9 AUTO-FILL: при загуба на фокус на код → AJAX lookup_code
-   → попълва цена + марка от item_memory история
+   → попълва цена + марка от item_variants история
+   → ако има множество варианти (multi-brand) → показва picker
    ═══════════════════════════════════════════════════ */
 
 /* S9.DEBUG: малка badge която показва статуса на auto-fill */
@@ -1594,17 +1600,73 @@ function s9dbg(msg, color){
   b._t = setTimeout(() => { b.style.display = 'none'; }, 4000);
 }
 
+/* S9.PICKER: контейнер за multi-variant chooser */
+(function(){
+  if(document.getElementById('s9VariantPicker')) return;
+  const pk = document.createElement('div');
+  pk.id = 's9VariantPicker';
+  pk.style.cssText = 'display:none;margin:8px 0;padding:10px;border:2px dashed #6366f1;border-radius:12px;background:rgba(99,102,241,.06)';
+  pk.innerHTML = '<div style="font:700 11px/1.4 system-ui;letter-spacing:.05em;text-transform:uppercase;color:#6366f1;margin-bottom:6px">Избери вариант:</div><div id="s9VariantList" style="display:flex;flex-wrap:wrap;gap:6px"></div>';
+  /* Вмъкни го след code/price ред (преди brandSelect) */
+  const cs = document.getElementById('cardSection');
+  const target = brandSelect && brandSelect.closest('div') ? brandSelect.closest('div').parentElement : null;
+  if(target) target.parentElement.insertBefore(pk, target);
+  else document.body.appendChild(pk);
+})();
+
+function hideVariantPicker(){
+  const pk = document.getElementById('s9VariantPicker');
+  if(pk) pk.style.display = 'none';
+}
+function showVariantPicker(variants){
+  const pk = document.getElementById('s9VariantPicker');
+  const list = document.getElementById('s9VariantList');
+  if(!pk || !list) return;
+  list.innerHTML = '';
+  variants.forEach((v, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.style.cssText = 'padding:8px 14px;border-radius:999px;border:1.5px solid #6366f1;background:#fff;color:#6366f1;font:700 13px/1.2 system-ui;cursor:pointer;display:flex;align-items:center;gap:6px';
+    const brandLabel = v.brand ? v.brand : '(без марка)';
+    btn.innerHTML = '<span>' + brandLabel + '</span><span style="font-family:monospace;font-weight:900">' + v.price.toFixed(2) + ' €</span><span style="opacity:.5;font-size:10px">×' + v.use_count + '</span>';
+    btn.addEventListener('click', () => {
+      priceInput.value = v.price.toFixed(2);
+      priceInput.dataset.autofilled = '1';
+      priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
+      setTimeout(() => { priceInput.style.background = ''; }, 1500);
+      if(v.brand && brandSelect){
+        for(let i = 0; i < brandSelect.options.length; i++){
+          if(brandSelect.options[i].text === v.brand || brandSelect.options[i].value === v.brand){
+            brandSelect.selectedIndex = i;
+            brandSelect.classList.add('chosen');
+            brandSelect.dataset.autofilled = '1';
+            break;
+          }
+        }
+      }
+      hideVariantPicker();
+      if(typeof updateStickyLive === 'function') updateStickyLive();
+    });
+    list.appendChild(btn);
+  });
+  pk.style.display = 'block';
+}
+
 let _lookupAbortCtrl = null;
 async function autoFillFromCode(code){
   code = String(code||'').trim();
-  if(!code) return;
-  /* Skip ако цена вече е въведена (не пиши върху ръчно въведена) */
-  const currentPrice = parseFloat(priceInput.value);
-  if(currentPrice > 0){ s9dbg('skip: price вече е '+currentPrice); return; }
+  if(!code){ hideVariantPicker(); return; }
+
+  /* Skip ако цена и марка вече са въведени (НЕ ръчно) */
+  const _curPrice = parseFloat(priceInput.value) || 0;
+  if(_curPrice > 0 && priceInput.dataset.autofilled !== '1'){
+    s9dbg('skip: ръчна цена '+_curPrice);
+    hideVariantPicker();
+    return;
+  }
 
   s9dbg('Lookup: ' + code + '...', 'rgba(0,80,150,.85)');
 
-  /* Cancel предишен заявка ако още е активна */
   if(_lookupAbortCtrl) { try { _lookupAbortCtrl.abort(); } catch(e){} }
   _lookupAbortCtrl = new AbortController();
 
@@ -1615,33 +1677,40 @@ async function autoFillFromCode(code){
     });
     if(!res.ok){ s9dbg('HTTP '+res.status, 'rgba(200,0,0,.85)'); return; }
     const data = await res.json();
-    if(!data){ s9dbg('empty response', 'rgba(200,0,0,.85)'); return; }
-    if(!data.ok){ s9dbg('Not found: '+(data.reason||'?'), 'rgba(150,100,0,.85)'); return; }
+    if(!data){ s9dbg('empty', 'rgba(200,0,0,.85)'); return; }
+    if(!data.ok){ s9dbg('Not found', 'rgba(150,100,0,.85)'); hideVariantPicker(); return; }
 
-    /* Auto-fill цена */
-    const _curPrice = parseFloat(priceInput.value) || 0;
-    if(data.price && _curPrice <= 0){
-      priceInput.value = parseFloat(data.price).toFixed(2);
-      priceInput.dataset.autofilled = '1';
-      priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
-      setTimeout(() => { priceInput.style.background = ''; }, 1500);
-    }
+    const variants = data.variants || [];
+    if(variants.length === 0){ s9dbg('Empty variants', 'rgba(150,100,0,.85)'); hideVariantPicker(); return; }
 
-    /* Auto-fill марка */
-    let brandSet = '';
-    if(data.brand && brandSelect && !brandSelect.value){
-      for(let i = 0; i < brandSelect.options.length; i++){
-        if(brandSelect.options[i].text === data.brand || brandSelect.options[i].value === data.brand){
-          brandSelect.selectedIndex = i;
-          brandSelect.classList.add('chosen');
-          brandSelect.dataset.autofilled = '1';
-          brandSet = ' + ' + data.brand;
-          break;
+    if(variants.length === 1){
+      /* Един вариант → auto-fill директно */
+      const v = variants[0];
+      hideVariantPicker();
+      if(v.price && _curPrice <= 0){
+        priceInput.value = v.price.toFixed(2);
+        priceInput.dataset.autofilled = '1';
+        priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
+        setTimeout(() => { priceInput.style.background = ''; }, 1500);
+      }
+      let brandSet = '';
+      if(v.brand && brandSelect && !brandSelect.value){
+        for(let i = 0; i < brandSelect.options.length; i++){
+          if(brandSelect.options[i].text === v.brand || brandSelect.options[i].value === v.brand){
+            brandSelect.selectedIndex = i;
+            brandSelect.classList.add('chosen');
+            brandSelect.dataset.autofilled = '1';
+            brandSet = ' + ' + v.brand;
+            break;
+          }
         }
       }
+      s9dbg('✓ ' + v.price.toFixed(2) + ' €' + brandSet, 'rgba(0,150,50,.85)');
+    } else {
+      /* Множество варианти → показва picker */
+      showVariantPicker(variants);
+      s9dbg(variants.length + ' варианта — избери', 'rgba(150,80,0,.85)');
     }
-
-    s9dbg('✓ ' + parseFloat(data.price).toFixed(2) + ' €' + brandSet, 'rgba(0,150,50,.85)');
 
     if(typeof updateStickyLive === 'function') updateStickyLive();
   } catch(err){
@@ -1666,7 +1735,7 @@ codeInput.addEventListener('keydown', e => {
 /* Trigger 3: debounced при input (като пише — 600ms след спирането) */
 let _lookupTimer = null;
 codeInput.addEventListener('input', () => {
-  /* S9.CLEAR: ако код стане празен → изчисти auto-filled полета */
+  /* S9.CLEAR: ако код стане празен → изчисти auto-filled полета + picker */
   if(!codeInput.value.trim()){
     if(priceInput.dataset.autofilled === '1'){
       priceInput.value = '';
@@ -1677,6 +1746,7 @@ codeInput.addEventListener('input', () => {
       brandSelect.classList.remove('chosen');
       delete brandSelect.dataset.autofilled;
     }
+    hideVariantPicker();
     if(_lookupTimer) clearTimeout(_lookupTimer);
     return;
   }
