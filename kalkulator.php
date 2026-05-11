@@ -1626,10 +1626,14 @@ function showVariantPicker(variants){
   variants.forEach((v, idx) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.style.cssText = 'padding:8px 14px;border-radius:999px;border:1.5px solid #6366f1;background:#fff;color:#6366f1;font:700 13px/1.2 system-ui;cursor:pointer;display:flex;align-items:center;gap:6px';
+    btn.style.cssText = 'padding:8px 14px;border-radius:999px;border:1.5px solid #6366f1;background:#fff;color:#6366f1;font:700 13px/1.2 system-ui;cursor:pointer;display:flex;align-items:center;gap:6px;touch-action:manipulation;-webkit-tap-highlight-color:transparent';
     const brandLabel = v.brand ? v.brand : '(без марка)';
     btn.innerHTML = '<span>' + brandLabel + '</span><span style="font-family:monospace;font-weight:900">' + v.price.toFixed(2) + ' €</span><span style="opacity:.5;font-size:10px">×' + v.use_count + '</span>';
-    btn.addEventListener('click', () => {
+
+    /* S9b.MOBILE FIX: prevent blur на code input + trigger веднага (pointerdown вместо click) */
+    const onPick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       priceInput.value = v.price.toFixed(2);
       priceInput.dataset.autofilled = '1';
       priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
@@ -1646,7 +1650,12 @@ function showVariantPicker(variants){
       }
       hideVariantPicker();
       if(typeof updateStickyLive === 'function') updateStickyLive();
-    });
+    };
+    /* Mousedown/touchstart предотвратяват blur на codeInput */
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('touchstart', (e) => e.preventDefault(), {passive: false});
+    /* Pointerdown trigger-ва immediately — без 300ms tap delay */
+    btn.addEventListener('pointerdown', onPick);
     list.appendChild(btn);
   });
   pk.style.display = 'block';
