@@ -1575,13 +1575,34 @@ brandSelect.addEventListener('change', () => brandSelect.classList.toggle('chose
    S9 AUTO-FILL: при загуба на фокус на код → AJAX lookup_code
    → попълва цена + марка от item_memory история
    ═══════════════════════════════════════════════════ */
+
+/* S9.DEBUG: малка badge която показва статуса на auto-fill */
+(function(){
+  if(document.getElementById('s9DebugBadge')) return;
+  const badge = document.createElement('div');
+  badge.id = 's9DebugBadge';
+  badge.style.cssText = 'position:fixed;top:4px;right:4px;z-index:9999;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.7);color:#fff;font:11px/1.2 monospace;display:none;max-width:200px;word-break:break-all';
+  document.body.appendChild(badge);
+})();
+function s9dbg(msg, color){
+  const b = document.getElementById('s9DebugBadge');
+  if(!b) return;
+  b.textContent = msg;
+  b.style.background = color || 'rgba(0,0,0,.7)';
+  b.style.display = 'block';
+  clearTimeout(b._t);
+  b._t = setTimeout(() => { b.style.display = 'none'; }, 4000);
+}
+
 let _lookupAbortCtrl = null;
 async function autoFillFromCode(code){
   code = String(code||'').trim();
   if(!code) return;
   /* Skip ако цена вече е въведена (не пиши върху ръчно въведена) */
   const currentPrice = parseFloat(priceInput.value);
-  if(currentPrice > 0) return;
+  if(currentPrice > 0){ s9dbg('skip: price вече е '+currentPrice); return; }
+
+  s9dbg('Lookup: ' + code + '...', 'rgba(0,80,150,.85)');
 
   /* Cancel предишен заявка ако още е активна */
   if(_lookupAbortCtrl) { try { _lookupAbortCtrl.abort(); } catch(e){} }
@@ -1592,35 +1613,39 @@ async function autoFillFromCode(code){
       credentials: 'same-origin',
       signal: _lookupAbortCtrl.signal
     });
-    if(!res.ok) return;
+    if(!res.ok){ s9dbg('HTTP '+res.status, 'rgba(200,0,0,.85)'); return; }
     const data = await res.json();
-    if(!data || !data.ok) return;
+    if(!data){ s9dbg('empty response', 'rgba(200,0,0,.85)'); return; }
+    if(!data.ok){ s9dbg('Not found: '+(data.reason||'?'), 'rgba(150,100,0,.85)'); return; }
 
-    /* Auto-fill цена (само ако още е празна) */
+    /* Auto-fill цена */
     if(data.price && parseFloat(priceInput.value) <= 0){
       priceInput.value = parseFloat(data.price).toFixed(2);
-      /* Visual hint че е auto-filled */
-      priceInput.style.background = 'rgba(76, 175, 80, 0.08)';
+      priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
       setTimeout(() => { priceInput.style.background = ''; }, 1500);
     }
 
-    /* Auto-fill марка (само ако още няма избрана) */
+    /* Auto-fill марка */
+    let brandSet = '';
     if(data.brand && brandSelect && !brandSelect.value){
-      /* Намери option с този текст */
       for(let i = 0; i < brandSelect.options.length; i++){
         if(brandSelect.options[i].text === data.brand || brandSelect.options[i].value === data.brand){
           brandSelect.selectedIndex = i;
           brandSelect.classList.add('chosen');
+          brandSet = ' + ' + data.brand;
           break;
         }
       }
     }
 
-    /* Трик: ако sticky preview е активен → re-render */
+    s9dbg('✓ ' + parseFloat(data.price).toFixed(2) + ' €' + brandSet, 'rgba(0,150,50,.85)');
+
     if(typeof updateStickyLive === 'function') updateStickyLive();
   } catch(err){
-    /* Silent — auto-fill не е критичен */
-    if(err.name !== 'AbortError') console.warn('lookup_code:', err);
+    if(err.name !== 'AbortError'){
+      s9dbg('ERR: '+(err.message||err.name||'?'), 'rgba(200,0,0,.85)');
+      console.warn('lookup_code:', err);
+    }
   }
 }
 
