@@ -2799,6 +2799,13 @@ setTimeout(restoreSessionState, 200);
   let lpCtx = 'code'; // 'code' | 'price'
 
   window.lpSetCtx = function(ctx){
+    /* S6 FIX: не може ЦЕНА без въведен КОД */
+    if(ctx === 'price' && !codeInput.value.trim()){
+      if(typeof flash === 'function') flash(codeInput);
+      if(typeof s9dbg === 'function') s9dbg('Първо въведи КОД!', 'rgba(200,80,0,.9)');
+      if(navigator.vibrate) try { navigator.vibrate([20,40,20]); } catch(e){}
+      ctx = 'code'; // принудително връща на код
+    }
     lpCtx = ctx;
     const lbl = document.getElementById('lpCtxLabel');
     if(lbl){
@@ -2815,6 +2822,10 @@ setTimeout(restoreSessionState, 200);
   };
 
   window.lpNumPress = function(key){
+    /* S6 FIX: ако сме в context 'price' но КОД е празен → блок */
+    if(lpCtx === 'price' && !codeInput.value.trim()){
+      lpSetCtx('code');
+    }
     const target = lpCtx === 'code' ? codeInput : priceInput;
     if(!target) return;
     let v = target.value || '';
@@ -2905,7 +2916,7 @@ setTimeout(restoreSessionState, 200);
     arr.push(entry);
     saveP(arr);
     items = [];
-    if(typeof renderItems === 'function') renderItems();
+    if(typeof render === 'function') render();
     if(typeof updateTotals === 'function') updateTotals();
     codeInput.value = '';
     priceInput.value = '';
@@ -2919,7 +2930,7 @@ setTimeout(restoreSessionState, 200);
     if(!p) return;
     if(items && items.length) window.lpParkSale();
     items = (p.items || []).slice();
-    if(typeof renderItems === 'function') renderItems();
+    if(typeof render === 'function') render();
     if(typeof updateTotals === 'function') updateTotals();
     if(p.cardNumber && typeof onCardEntered === 'function'){
       const ci = document.getElementById('cardInput');
