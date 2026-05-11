@@ -142,6 +142,7 @@ if ($ajax === 'lookup_card') {
 /* ══════════════════════════════════════════════════════
    AJAX: Запази продажба
    ══════════════════════════════════════════════════════ */
+/* S5-REWRITE-INJECTED: save → purchase_scans + voucher used + customer recompute + item_memory */
 if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $body = json_decode(file_get_contents('php://input'), true) ?? [];
 
@@ -150,46 +151,114 @@ if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $final    = round((float)($body['final']    ?? 0), 2);
     $discount = round((float)($body['discount'] ?? 0), 2);
 
+    /* S79.UNIFIED полета */
+    $cardNumber    = trim((string)($body['card_number']    ?? ''));
+    $hasCard       = (int)($body['has_card']       ?? 0);
+    $customerId    = (int)($body['customer_id']    ?? 0) ?: null;
+    $voucherId     = (int)($body['voucher_id']     ?? 0) ?: null;
+    $givenAmount   = isset($body['given_amount'])  && $body['given_amount']  !== null && $body['given_amount']  !== '' ? round((float)$body['given_amount'], 2)  : null;
+    $changeAmount  = isset($body['change_amount']) && $body['change_amount'] !== null && $body['change_amount'] !== '' ? round((float)$body['change_amount'], 2) : null;
+    $paymentMethod = trim((string)($body['payment_method'] ?? 'cash')) ?: 'cash';
+
     // Локацията — взимаме от URL (?location=X), тя е най-надеждна
     $locId   = $locationId > 0 ? $locationId : (int)($body['location_id'] ?? 0);
     $locName = $locationName ?: trim((string)($body['location_name'] ?? ''));
-    // Ако имаме locId но не и locName — взимаме от БД
     if ($locId > 0 && !$locName) {
         try { $s=$pdo->prepare("SELECT name FROM locations WHERE id=:id LIMIT 1"); $s->execute(['id'=>$locId]); $locName=(string)($s->fetchColumn()?:''); } catch(Throwable $e){}
     }
 
     if (!$items || $final == 0) jsonOut(['ok' => false, 'error' => 'Няма артикули.']);
 
+    $payload = json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
     try {
-        // Автоматично създаване на таблицата ако не съществува
-        $pdo->exec("CREATE TABLE IF NOT EXISTS calc_sales (
-            id           INT AUTO_INCREMENT PRIMARY KEY,
-            location_id  INT,
-            location_name VARCHAR(100),
-            items_json   MEDIUMTEXT NOT NULL,
-            gross_total  DECIMAL(10,2) NOT NULL DEFAULT 0,
-            final_total  DECIMAL(10,2) NOT NULL DEFAULT 0,
-            discount     DECIMAL(10,2) NOT NULL DEFAULT 0,
-            created_at   DATETIME NOT NULL,
-            INDEX idx_date (created_at),
-            INDEX idx_loc  (location_id)
-        )");
+        $pdo->beginTransaction();
 
-        $stmt = $pdo->prepare("INSERT INTO calc_sales
-            (location_id, location_name, items_json, gross_total, final_total, discount, created_at)
-            VALUES (:loc_id, :loc_name, :items, :gross, :final, :disc, :now)");
+        /* ── 1. INSERT в purchase_scans (главна таблица) ── */
+        $stmt = $pdo->prepare("INSERT INTO purchase_scans
+            (customer_id, has_card, store_id, amount, discount_amount, discount_label,
+             multiplier, awarded_purchases, created_at,
+             location_id, location_name, calc_payload,
+             given_amount, change_amount, payment_method)
+            VALUES (:cust_id, :has_card, NULL, :amount, :disc_amt, NULL,
+                    1, :awarded, :now,
+                    :loc_id, :loc_name, :payload,
+                    :given, :change, :pm)");
         $stmt->execute([
-            'loc_id'   => $locId   ?: null,
-            'loc_name' => $locName ?: null,
-            'items'    => json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            'gross'    => $gross,
-            'final'    => $final,
-            'disc'     => $discount,
+            'cust_id'  => $customerId,
+            'has_card' => $hasCard,
+            'amount'   => $final,
+            'disc_amt' => $discount,
+            'awarded'  => $hasCard ? 1 : 0,
             'now'      => date('Y-m-d H:i:s'),
+            'loc_id'   => $locId ?: null,
+            'loc_name' => $locName ?: null,
+            'payload'  => $payload,
+            'given'    => $givenAmount,
+            'change'   => $changeAmount,
+            'pm'       => $paymentMethod,
         ]);
+        $newId = (int)$pdo->lastInsertId();
 
-        jsonOut(['ok' => true, 'id' => (int)$pdo->lastInsertId(), 'loc_id' => $locId, 'loc_name' => $locName]);
+        /* ── 2. Mark voucher used (ако е изпратен voucher_id) ── */
+        $voucherMarked = false;
+        if ($voucherId && $customerId) {
+            $v = $pdo->prepare("UPDATE vouchers
+                                SET used=1, status='used', redeemed_at=NOW()
+                                WHERE id=:vid AND customer_id=:cid AND used=0
+                                LIMIT 1");
+            $v->execute(['vid' => $voucherId, 'cid' => $customerId]);
+            $voucherMarked = $v->rowCount() > 0;
+        }
+
+        /* ── 3. Recompute customer totals (само при has_card=1) ── */
+        if ($customerId && $hasCard) {
+            $r = $pdo->prepare("UPDATE customers c
+                SET c.total_spent = COALESCE((
+                        SELECT SUM(ps.amount) FROM purchase_scans ps
+                         WHERE ps.customer_id = c.id AND ps.deleted_at IS NULL
+                    ), 0),
+                    c.total_purchases = COALESCE((
+                        SELECT COUNT(*) FROM purchase_scans ps
+                         WHERE ps.customer_id = c.id AND ps.deleted_at IS NULL
+                    ), 0)
+                WHERE c.id = :cid");
+            $r->execute(['cid' => $customerId]);
+        }
+
+        /* ── 4. UPSERT в item_memory (auto-fill памет за следващи продажби) ── */
+        try {
+            $um = $pdo->prepare("INSERT INTO item_memory (code, price, brand, last_seen, use_count)
+                VALUES (:code, :price, :brand, NOW(), 1)
+                ON DUPLICATE KEY UPDATE
+                    price = IF(VALUES(price) > 0, VALUES(price), price),
+                    brand = COALESCE(NULLIF(VALUES(brand),''), brand),
+                    last_seen = NOW(),
+                    use_count = use_count + 1");
+            foreach ($items as $it) {
+                $code  = trim((string)($it['code']  ?? ''));
+                $price = round((float)($it['price'] ?? 0), 2);
+                $brand = trim((string)($it['brand'] ?? ''));
+                if ($code === '' || $price <= 0) continue;
+                $um->execute(['code' => $code, 'price' => $price, 'brand' => $brand ?: null]);
+            }
+        } catch (Throwable $e) {
+            // item_memory грешки не са fatal — лог + продължи
+            error_log('kalkulator.save item_memory: ' . $e->getMessage());
+        }
+
+        $pdo->commit();
+
+        jsonOut([
+            'ok' => true,
+            'id' => $newId,
+            'loc_id' => $locId,
+            'loc_name' => $locName,
+            'voucher_marked' => $voucherMarked,
+        ]);
     } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('kalkulator.save: ' . $e->getMessage());
         jsonOut(['ok' => false, 'error' => $e->getMessage()]);
     }
 }
@@ -205,29 +274,22 @@ if ($ajax === 'history') {
     }
 
     try {
-        // Създай таблицата ако не съществува
-        $pdo->exec("CREATE TABLE IF NOT EXISTS calc_sales (
-            id           INT AUTO_INCREMENT PRIMARY KEY,
-            location_id  INT,
-            location_name VARCHAR(100),
-            items_json   MEDIUMTEXT NOT NULL,
-            gross_total  DECIMAL(10,2) NOT NULL DEFAULT 0,
-            final_total  DECIMAL(10,2) NOT NULL DEFAULT 0,
-            discount     DECIMAL(10,2) NOT NULL DEFAULT 0,
-            created_at   DATETIME NOT NULL,
-            INDEX idx_date (created_at),
-            INDEX idx_loc  (location_id)
-        )");
-
+        /* S5-REWRITE: чете от purchase_scans (главна таблица), filter has_card=0 за касиерска история */
         [$start, $end] = bizWindow($bizDate);
         $params  = ['start' => $start, 'end' => $end];
         $locCond = $locId > 0 ? 'AND location_id = :loc' : '';
         if ($locId > 0) $params['loc'] = $locId;
 
         $stmt = $pdo->prepare("
-            SELECT id, created_at, items_json, gross_total, final_total, discount, location_name
-            FROM calc_sales
-            WHERE created_at BETWEEN :start AND :end $locCond
+            SELECT id, created_at, calc_payload AS items_json, amount AS final_total,
+                   discount_amount AS discount, location_name,
+                   given_amount, change_amount, payment_method,
+                   has_card, customer_id
+            FROM purchase_scans
+            WHERE created_at BETWEEN :start AND :end
+              AND has_card = 0
+              AND deleted_at IS NULL
+              $locCond
             ORDER BY created_at ASC
         ");
         $stmt->execute($params);
@@ -242,7 +304,8 @@ if ($ajax === 'history') {
 
         foreach ($rows as $row) {
             $items = json_decode((string)$row['items_json'], true) ?: [];
-            $dayGross    += (float)$row['gross_total'];
+            /* S5-REWRITE: gross = final + discount (purchase_scans няма gross_total колона) */
+            $dayGross    += (float)$row['final_total'] + (float)$row['discount'];
             $dayFinal    += (float)$row['final_total'];
             $dayDiscount += (float)$row['discount'];
 
@@ -273,7 +336,7 @@ if ($ajax === 'history') {
                 'id'          => (int)$row['id'],
                 'time'        => substr((string)$row['created_at'], 11, 5),
                 'items'       => $parsedItems,
-                'gross'       => (float)$row['gross_total'],
+                'gross'       => (float)$row['final_total'] + (float)$row['discount'],
                 'final'       => (float)$row['final_total'],
                 'discount'    => (float)$row['discount'],
                 'location'    => $row['location_name'] ?? '',
@@ -301,14 +364,35 @@ if ($ajax === 'history') {
    AJAX: Изтрий продажба
    ══════════════════════════════════════════════════════ */
 if ($ajax === 'delete_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* S5-REWRITE: soft delete (deleted_at) на purchase_scans + recompute totals */
     $body = json_decode(file_get_contents('php://input'), true) ?? [];
     $id   = (int)($body['id'] ?? 0);
     if (!$id) jsonOut(['ok'=>false,'error'=>'Липсва ID.']);
     try {
-        $stmt = $pdo->prepare("DELETE FROM calc_sales WHERE id=:id");
+        $pdo->beginTransaction();
+
+        /* Прочети customer_id преди soft-delete (за recompute) */
+        $s = $pdo->prepare("SELECT customer_id FROM purchase_scans WHERE id=:id LIMIT 1");
+        $s->execute(['id'=>$id]);
+        $cid = (int)$s->fetchColumn();
+
+        /* Soft delete */
+        $stmt = $pdo->prepare("UPDATE purchase_scans SET deleted_at=NOW() WHERE id=:id AND deleted_at IS NULL");
         $stmt->execute(['id'=>$id]);
+
+        /* Recompute totals ако е с карта */
+        if ($cid) {
+            $r = $pdo->prepare("UPDATE customers c
+                SET c.total_spent = COALESCE((SELECT SUM(amount) FROM purchase_scans WHERE customer_id=c.id AND deleted_at IS NULL), 0),
+                    c.total_purchases = COALESCE((SELECT COUNT(*) FROM purchase_scans WHERE customer_id=c.id AND deleted_at IS NULL), 0)
+                WHERE c.id=:cid");
+            $r->execute(['cid'=>$cid]);
+        }
+
+        $pdo->commit();
         jsonOut(['ok'=>true]);
     } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         jsonOut(['ok'=>false,'error'=>$e->getMessage()]);
     }
 }
@@ -317,6 +401,7 @@ if ($ajax === 'delete_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
    AJAX: Редактирай продажба (само бележка/връщане)
    ══════════════════════════════════════════════════════ */
 if ($ajax === 'update_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    /* S5-REWRITE: UPDATE purchase_scans + recompute */
     $body     = json_decode(file_get_contents('php://input'), true) ?? [];
     $id       = (int)($body['id']       ?? 0);
     $items    = $body['items']           ?? [];
@@ -325,13 +410,31 @@ if ($ajax === 'update_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $discount = round((float)($body['discount'] ?? 0), 2);
     if (!$id) jsonOut(['ok'=>false,'error'=>'Липсва ID.']);
     try {
-        $stmt = $pdo->prepare("UPDATE calc_sales SET items_json=:items, gross_total=:gross, final_total=:final, discount=:disc WHERE id=:id");
+        $pdo->beginTransaction();
+        $stmt = $pdo->prepare("UPDATE purchase_scans
+            SET calc_payload=:items, amount=:final, discount_amount=:disc, edited_at=NOW(), edited_by='kalkulator'
+            WHERE id=:id");
         $stmt->execute([
             'items' => json_encode($items, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),
-            'gross' => $gross, 'final' => $final, 'disc' => $discount, 'id' => $id
+            'final' => $final, 'disc' => $discount, 'id' => $id
         ]);
+
+        /* Recompute totals ако с карта */
+        $s = $pdo->prepare("SELECT customer_id FROM purchase_scans WHERE id=:id LIMIT 1");
+        $s->execute(['id'=>$id]);
+        $cid = (int)$s->fetchColumn();
+        if ($cid) {
+            $r = $pdo->prepare("UPDATE customers c
+                SET c.total_spent = COALESCE((SELECT SUM(amount) FROM purchase_scans WHERE customer_id=c.id AND deleted_at IS NULL), 0),
+                    c.total_purchases = COALESCE((SELECT COUNT(*) FROM purchase_scans WHERE customer_id=c.id AND deleted_at IS NULL), 0)
+                WHERE c.id=:cid");
+            $r->execute(['cid'=>$cid]);
+        }
+
+        $pdo->commit();
         jsonOut(['ok'=>true]);
     } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         jsonOut(['ok'=>false,'error'=>$e->getMessage()]);
     }
 }
@@ -1603,6 +1706,8 @@ saveBtn.addEventListener('click', async () => {
         card_number: scannedCard || null,
         has_card: scannedCard ? 1 : 0,
         customer_id: scannedCustomerId || null,
+        /* S5-REWRITE: voucher_id за mark used */
+        voucher_id: (scannedCustomerData && scannedCustomerData.active_voucher_id) ? scannedCustomerData.active_voucher_id : null,
         given_amount: givenAmount !== '' ? parseFloat(givenAmount) : null,
         change_amount: givenAmount !== '' ? Math.round((parseFloat(givenAmount) - Math.abs(final)) * 100) / 100 : null,
         payment_method: paymentMethod,
