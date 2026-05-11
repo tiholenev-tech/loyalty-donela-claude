@@ -1402,14 +1402,51 @@ body{transition:padding-bottom .25s ease}
 .qr-close-btn:active{background:rgba(0,0,0,.9);transform:scale(.92)}
 .qr-expanded{position:relative !important}
 
-/* S6: Подчертай items list когато е празен (placeholder) */
+/* S6: Empty placeholder на items list */
 #itemsList:empty::before{
   content:'Тук ще се покажат добавените артикули';
-  display:block;text-align:center;padding:20px 12px;
-  font-size:12px;color:var(--text3);font-style:italic;
-  border:2px dashed rgba(99,102,241,.2);border-radius:14px;
+  display:block;text-align:center;padding:14px 12px;
+  font-size:11px;color:var(--text3);font-style:italic;
+  border:1.5px dashed rgba(99,102,241,.2);border-radius:12px;
   margin-bottom:8px;
 }
+
+/* S6: tb-card-pill в topbar — компактен бутон за карта */
+.topbar{display:flex;align-items:center;gap:8px}
+.topbar-left{flex-shrink:0;font-size:13px !important}
+.tb-card-pill{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:6px 10px;border:1px solid rgba(99,102,241,.4);border-radius:999px;
+  background:rgba(99,102,241,.08);color:#a5b4fc;
+  font:800 11px/1 'Montserrat',sans-serif;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+.tb-card-pill:active{background:rgba(99,102,241,.2)}
+.tb-card-pill.has-card{
+  background:linear-gradient(135deg,rgba(34,197,94,.2),rgba(34,197,94,.1));
+  border-color:rgba(34,197,94,.5);color:#4ade80;
+}
+.topbar-right{flex-shrink:0}
+
+/* S6: cardSection скрита по default — отваря се с .open */
+.card-section{
+  max-height:0;overflow:hidden;margin:0 !important;padding:0 !important;
+  border:none !important;
+  transition:max-height .25s ease, padding .25s ease, margin .25s ease;
+}
+.card-section.open{
+  max-height:600px;
+  margin:8px 0 !important;padding:14px !important;
+  border:1px solid var(--border) !important;
+}
+
+/* S6: numpad −20% — по-малки бутони */
+.lp-np{height:36px !important;font-size:16px !important}
+.lp-np.fn{font-size:10px !important}
+.lp-np.lp-add, .lp-np.lp-finish{font-size:12px !important;height:40px !important}
+.lp-numpad-grid{gap:3px !important}
+.lp-numpad-zone{padding:6px 6px calc(8px + env(safe-area-inset-bottom,0px)) !important}
+body.lp-keypad-open{padding-bottom:300px !important}
 
 </style>
 </head>
@@ -1419,8 +1456,13 @@ body{transition:padding-bottom .25s ease}
 <!-- Topbar -->
 <div class="topbar">
   <div class="topbar-left">
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> <span><?= $locationName ? h($locationName) : 'Калкулатор' ?></span>
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> <span><?= $locationName ? h($locationName) : 'Склад' ?></span>
   </div>
+  <!-- S6: малка карта pill в header -->
+  <button type="button" class="tb-card-pill" id="tbCardPill" onclick="toggleCardSection()" title="Лоялна карта">
+    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+    <span id="tbCardLabel">Карта</span>
+  </button>
   <div class="topbar-right" id="hTotal">0.00 €</div>
 </div>
 
@@ -2607,6 +2649,17 @@ function onCardEntered(card){
   if(cs) cs.style.display='none';
   document.getElementById('cardSection').classList.add('active');
 
+  /* S6: update tb card pill */
+  const tbPill = document.getElementById('tbCardPill');
+  const tbLbl = document.getElementById('tbCardLabel');
+  if(tbPill) tbPill.classList.add('has-card');
+  if(tbLbl) tbLbl.textContent = card;
+  /* Auto-close card section ако е разтворена */
+  const cs2 = document.getElementById('cardSection');
+  if(cs2 && cs2.classList.contains('open')){
+    setTimeout(() => cs2.classList.remove('open'), 800);
+  }
+
   /* Fetch име + ваучер от сървъра (precise — loyalty_cards → customers + vouchers) */
   fetch('?ajax=lookup_card&card=' + encodeURIComponent(card), { credentials: 'same-origin' })
     .then(r => r.ok ? r.json() : null)
@@ -2653,9 +2706,25 @@ function clearCardVisual(){
   const ci=document.getElementById('cardInput'); if(ci) ci.value='';
   const ss=document.getElementById('scanStatus'); if(ss){ ss.style.display='none'; ss.textContent=''; }
   document.getElementById('cardSection').classList.remove('active');
+  /* S6: reset tb card pill */
+  const tbPill = document.getElementById('tbCardPill');
+  const tbLbl = document.getElementById('tbCardLabel');
+  if(tbPill) tbPill.classList.remove('has-card');
+  if(tbLbl) tbLbl.textContent = 'Карта';
   if(typeof saveSessionState === 'function') saveSessionState();
 }
 window.clearCardVisual = clearCardVisual;
+
+/* S6: toggle на cardSection (отваря/затваря голямата секция при click на tb pill) */
+window.toggleCardSection = function(){
+  const sec = document.getElementById('cardSection');
+  if(!sec) return;
+  sec.classList.toggle('open');
+  /* Auto-scroll до cardSection ако отваряме */
+  if(sec.classList.contains('open')){
+    setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+  }
+};
 const _cardInputEl=document.getElementById('cardInput');
 if(_cardInputEl){
   _cardInputEl.addEventListener('input', e=>onCardEntered(e.target.value));
