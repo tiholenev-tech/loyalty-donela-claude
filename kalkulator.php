@@ -1402,11 +1402,14 @@ body{transition:padding-bottom .25s ease}
 .qr-close-btn:active{background:rgba(0,0,0,.9);transform:scale(.92)}
 .qr-expanded{position:relative !important}
 
-/* S6: размяна на ред — добавените артикули отиват НАД карта секцията */
-.wrap{display:flex;flex-direction:column}
-#itemsLabel{order:-3 !important;margin-top:0 !important}
-#itemsList{order:-2 !important}
-.card-section{order:-1 !important;margin-top:8px}
+/* S6: Подчертай items list когато е празен (placeholder) */
+#itemsList:empty::before{
+  content:'Тук ще се покажат добавените артикули';
+  display:block;text-align:center;padding:20px 12px;
+  font-size:12px;color:var(--text3);font-style:italic;
+  border:2px dashed rgba(99,102,241,.2);border-radius:14px;
+  margin-bottom:8px;
+}
 
 </style>
 </head>
@@ -1428,6 +1431,10 @@ body{transition:padding-bottom .25s ease}
 
 
   <!-- ⏹ СЕКЦИЯ 1: ЛОЯЛНА КАРТА (опционално) -->
+  <!-- S6: Добавени артикули — НА ВРЪХА на екрана -->
+  <div id="itemsLabel" class="items-label" style="display:none">Добавени артикули</div>
+  <div id="itemsList"></div>
+
   <div class="card-section" id="cardSection">
     <div class="card-head">
       <div class="card-head-title"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> <span>Лоялна карта на клиента</span></div>
@@ -1513,9 +1520,7 @@ body{transition:padding-bottom .25s ease}
     <button class="save-btn" id="saveBtnTop" style="margin-top:8px;height:54px;font-size:15px" disabled><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши продажбата</span></button>
   </div>
 
-  <!-- Добавени артикули -->
-  <div id="itemsLabel" class="items-label" style="display:none">Добавени артикули</div>
-  <div id="itemsList"></div>
+  <!-- S6: itemsList preмesteni НАГОРЕ преди cardSection (виж line ~1413) -->
 
   <!-- Totals row (запазваме id-тата за JS) -->
   <div class="totals-row" style="margin-top:10px">
