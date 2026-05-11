@@ -1858,8 +1858,20 @@ function showVariantPicker(variants){
     /* Mousedown/touchstart предотвратяват blur на codeInput */
     btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.addEventListener('touchstart', (e) => e.preventDefault(), {passive: false});
-    /* Pointerdown trigger-ва immediately — без 300ms tap delay */
-    btn.addEventListener('pointerdown', onPick);
+    /* S6 FIX: позволи скрол — pick само ако пръстът НЕ се е движил >8px */
+    let _startX = null, _startY = null;
+    btn.addEventListener('pointerdown', (e) => {
+      _startX = e.clientX; _startY = e.clientY;
+    });
+    btn.addEventListener('pointerup', (e) => {
+      if(_startX === null) return;
+      const dx = Math.abs(e.clientX - _startX);
+      const dy = Math.abs(e.clientY - _startY);
+      _startX = _startY = null;
+      if(dx > 8 || dy > 8) return; /* user scrolled — не приемай pick */
+      onPick(e);
+    });
+    btn.addEventListener('pointercancel', () => { _startX = _startY = null; });
     list.appendChild(btn);
   });
   pk.style.display = 'block';
