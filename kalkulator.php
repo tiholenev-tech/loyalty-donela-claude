@@ -1254,6 +1254,121 @@ body::before{
   .change-amount{font-size:34px}
   .sbox{margin:10px 8px 0;padding:14px}
 }
+/* ═══════════════════════════════════════════════════════════════
+   S6 STICKY NUMPAD (от sale.php pattern)
+   Sticky bottom — винаги видим. Заменя native клавиатура.
+   ═══════════════════════════════════════════════════════════════ */
+.f-input[readonly]{caret-color:transparent;cursor:pointer}
+
+/* Дай padding bottom на body за numpad-а да не покрива съдържание */
+body{padding-bottom:340px !important}
+
+.lp-numpad-zone{
+  position:fixed;bottom:0;left:0;right:0;z-index:500;
+  background:linear-gradient(180deg,hsl(220 25% 6% / 0.96),hsl(220 25% 4% / 0.99));
+  border-top:1px solid rgba(99,102,241,.25);
+  padding:8px 8px calc(12px + env(safe-area-inset-bottom,0px));
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.lp-numpad-ctx{
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:6px;height:22px;
+}
+.lp-ctx-label{
+  font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  padding:3px 12px;border-radius:6px;
+}
+.lp-ctx-code{background:rgba(99,102,241,.18);color:#a5b4fc}
+.lp-ctx-price{background:rgba(34,197,94,.18);color:#4ade80}
+
+.lp-parked-bar{
+  display:flex;align-items:center;gap:8px;padding:6px 12px;margin-bottom:6px;
+  background:linear-gradient(135deg,rgba(232,184,0,.22),rgba(232,184,0,.08));
+  border:1px dashed #E8B800;border-radius:10px;cursor:pointer;
+  color:#E8B800;font-size:11px;font-weight:800;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+.lp-parked-bar b{font-size:13px}
+.lp-parked-list{
+  display:none;flex-direction:column;gap:4px;padding:6px;margin-bottom:6px;
+  background:rgba(232,184,0,.06);border:1px solid rgba(232,184,0,.2);border-radius:10px;
+  max-height:120px;overflow-y:auto;
+}
+.lp-parked-list.open{display:flex}
+.lp-parked-row{
+  display:flex;gap:6px;align-items:center;padding:6px 8px;
+  background:rgba(15,23,42,.7);border-radius:8px;
+}
+.lp-parked-row .pr-i{flex:1;font-size:10px;color:#e2e8f0;font-family:monospace}
+.lp-parked-row .pr-i b{color:#E8B800;font-weight:900;font-size:12px}
+.lp-parked-row button{
+  padding:4px 8px;border:none;border-radius:6px;cursor:pointer;
+  font:900 10px/1 'Montserrat',sans-serif;letter-spacing:.04em;text-transform:uppercase;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+.lp-parked-row .pr-l{background:#6366f1;color:#fff}
+.lp-parked-row .pr-d{background:rgba(248,113,113,.2);color:#f87171}
+
+.lp-numpad-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.lp-np{
+  height:42px;border-radius:12px;border:1px solid rgba(99,102,241,.18);
+  background:rgba(15,23,42,.6);color:#f1f5f9;
+  font:900 18px/1 monospace;font-variant-numeric:tabular-nums;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  transition:all .12s;
+}
+.lp-np:active{transform:scale(.94);background:hsl(255 40% 22% / 0.6)}
+.lp-np.fn{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:800;color:#cbd5e1;letter-spacing:.04em}
+.lp-np.lp-cena{color:#a5b4fc}
+.lp-np.lp-cena.lp-active{background:#6366f1;color:#fff;border-color:#6366f1}
+.lp-np.clear{color:#f87171}
+.lp-np.lp-park{color:#E8B800;border-color:rgba(232,184,0,.4);font-size:10px;line-height:1.1}
+.lp-np.lp-add{
+  grid-column:span 2;
+  background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;
+  font:900 13px/1 'Montserrat',sans-serif;letter-spacing:.06em;text-transform:uppercase;
+  border:none;box-shadow:0 4px 14px rgba(99,102,241,.4);
+}
+.lp-np.lp-finish{
+  grid-column:span 2;
+  background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;
+  font:900 13px/1 'Montserrat',sans-serif;letter-spacing:.06em;text-transform:uppercase;
+  border:none;box-shadow:0 4px 14px rgba(34,197,94,.4);
+}
+
+/* Confirmation modal */
+.lp-confirm{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
+.lp-confirm-bg{position:absolute;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px)}
+.lp-confirm-box{
+  position:relative;width:100%;max-width:340px;padding:20px 18px;
+  background:linear-gradient(180deg,#1e293b,#0f172a);
+  border:1px solid #6366f1;border-radius:20px;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,.6);
+}
+.lp-cm-icon{
+  width:54px;height:54px;border-radius:50%;margin:0 auto 8px;
+  background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+}
+.lp-cm-title{font:900 17px/1.2 'Montserrat',sans-serif;color:#f1f5f9;margin-bottom:4px}
+.lp-cm-sub{font:700 11px/1.3 'Montserrat',sans-serif;color:#94a3b8;margin-bottom:6px}
+.lp-cm-amount{
+  font:900 36px/1 monospace;color:#22c55e;padding:12px;margin:8px 0;
+  background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:12px;
+}
+.lp-cm-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.lp-cm-btn{
+  padding:12px;border:none;border-radius:12px;cursor:pointer;
+  font:900 13px/1 'Montserrat',sans-serif;letter-spacing:.06em;text-transform:uppercase;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+.lp-cm-btn.lp-cm-no{background:#1e293b;color:#94a3b8;border:1px solid #334155}
+.lp-cm-btn.lp-cm-yes{
+  background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;
+  box-shadow:0 4px 12px rgba(34,197,94,.4);
+}
+
 </style>
 </head>
 <body>
@@ -1311,7 +1426,7 @@ body::before{
     <div class="row-top">
       <div>
         <div class="f-label">Код</div>
-        <input id="codeInput" class="f-input" type="text" inputmode="numeric" placeholder="330" autocomplete="off" enterkeyhint="next">
+        <input id="codeInput" class="f-input" type="text" inputmode="none" placeholder="330" autocomplete="off" enterkeyhint="next" readonly>
       </div>
       <div>
         <div class="f-label">Производител</div>
@@ -1325,7 +1440,7 @@ body::before{
       </div>
       <div>
         <div class="f-label">Цена (€)</div>
-        <input id="priceInput" class="f-input" type="number" inputmode="decimal" step="0.01" placeholder="0.00" autocomplete="off" enterkeyhint="done">
+        <input id="priceInput" class="f-input" type="text" inputmode="none" placeholder="0.00" autocomplete="off" enterkeyhint="done" readonly>
       </div>
     </div>
     <div class="row-qty">
@@ -2677,7 +2792,228 @@ window.addEventListener('beforeunload', saveSessionState);
 window.addEventListener('pagehide', saveSessionState);
 setTimeout(restoreSessionState, 200);
 
+/* ═══════════════════════════════════════════════════════════════
+   S6 STICKY NUMPAD — JS (от sale.php pattern, adapted за loyalty)
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+  let lpCtx = 'code'; // 'code' | 'price'
+
+  window.lpSetCtx = function(ctx){
+    lpCtx = ctx;
+    const lbl = document.getElementById('lpCtxLabel');
+    if(lbl){
+      if(ctx === 'code'){
+        lbl.textContent = 'КОД';
+        lbl.className = 'lp-ctx-label lp-ctx-code';
+      } else {
+        lbl.textContent = 'ЦЕНА';
+        lbl.className = 'lp-ctx-label lp-ctx-price';
+      }
+    }
+    document.getElementById('lpBtnCod').classList.toggle('lp-active', ctx === 'code');
+    document.getElementById('lpBtnCena').classList.toggle('lp-active', ctx === 'price');
+  };
+
+  window.lpNumPress = function(key){
+    const target = lpCtx === 'code' ? codeInput : priceInput;
+    if(!target) return;
+    let v = target.value || '';
+    if(key === 'C'){ v = ''; }
+    else if(key === 'back'){ v = v.slice(0, -1); }
+    else if(key === '.'){ if(!v.includes('.')) v = (v || '0') + '.'; }
+    else { if(v.length < 20) v += key; }
+    target.value = v;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    if(target.dataset.autofilled === '1') delete target.dataset.autofilled;
+    if(navigator.vibrate) try { navigator.vibrate(6); } catch(e){}
+  };
+
+  /* Tap на поле → set ctx */
+  if(codeInput) codeInput.addEventListener('click', () => lpSetCtx('code'));
+  if(priceInput) priceInput.addEventListener('click', () => lpSetCtx('price'));
+
+  /* Initial */
+  setTimeout(() => lpSetCtx('code'), 100);
+
+  /* ═══ PARKING ═══ */
+  const PARK_KEY = 'loyalty_parked_' + (typeof LOCATION_ID !== 'undefined' ? LOCATION_ID : 'g');
+  function loadP(){ try { return JSON.parse(localStorage.getItem(PARK_KEY) || '[]'); } catch(e){ return []; } }
+  function saveP(arr){ try { localStorage.setItem(PARK_KEY, JSON.stringify(arr)); } catch(e){} }
+  function renderBar(){
+    const arr = loadP();
+    const bar = document.getElementById('lpParkedBar');
+    const cnt = document.getElementById('lpParkedCnt');
+    if(!bar) return;
+    if(arr.length === 0){
+      bar.style.display = 'none';
+      document.getElementById('lpParkedList').classList.remove('open');
+    } else {
+      bar.style.display = 'flex';
+      if(cnt) cnt.textContent = arr.length;
+    }
+  }
+  function renderList(){
+    const list = document.getElementById('lpParkedList');
+    if(!list) return;
+    const arr = loadP();
+    list.innerHTML = '';
+    arr.forEach((p, idx) => {
+      const row = document.createElement('div');
+      row.className = 'lp-parked-row';
+      const cnt = (p.items || []).length;
+      const tot = parseFloat(p.total || 0).toFixed(2);
+      const t = p.time || '--:--';
+      const cust = p.customer ? ' · ' + p.customer : '';
+      row.innerHTML = '<div class="pr-i">' + t + ' · ' + cnt + ' арт · <b>' + tot + ' €</b>' + cust + '</div>';
+      const bL = document.createElement('button');
+      bL.className = 'pr-l';
+      bL.textContent = 'Зареди';
+      bL.addEventListener('click', () => loadOne(idx));
+      const bD = document.createElement('button');
+      bD.className = 'pr-d';
+      bD.textContent = '×';
+      bD.addEventListener('click', () => delOne(idx));
+      row.appendChild(bL);
+      row.appendChild(bD);
+      list.appendChild(row);
+    });
+  }
+  window.lpTogglePark = function(){
+    const list = document.getElementById('lpParkedList');
+    if(!list) return;
+    if(list.classList.contains('open')){
+      list.classList.remove('open');
+    } else {
+      renderList();
+      list.classList.add('open');
+    }
+  };
+  window.lpParkSale = function(){
+    if(!items.length) return;
+    const final = items.reduce((s,i)=>s+i.final, 0);
+    const base = items.reduce((s,i)=>s+i.base, 0);
+    const now = new Date();
+    const time = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+    const entry = {
+      items: items.slice(),
+      customer: (typeof scannedCustomerData !== 'undefined' && scannedCustomerData && scannedCustomerData.name) ? scannedCustomerData.name : '',
+      customerId: typeof scannedCustomerId !== 'undefined' ? scannedCustomerId : null,
+      cardNumber: typeof scannedCard !== 'undefined' ? scannedCard : '',
+      time: time, total: final.toFixed(2), base: base.toFixed(2), discount: (base - final).toFixed(2)
+    };
+    const arr = loadP();
+    arr.push(entry);
+    saveP(arr);
+    items = [];
+    if(typeof renderItems === 'function') renderItems();
+    if(typeof updateTotals === 'function') updateTotals();
+    codeInput.value = '';
+    priceInput.value = '';
+    if(brandSelect){ brandSelect.value=''; brandSelect.classList.remove('chosen'); }
+    renderBar();
+    if(navigator.vibrate) try { navigator.vibrate([12,8,12]); } catch(e){}
+  };
+  function loadOne(idx){
+    const arr = loadP();
+    const p = arr[idx];
+    if(!p) return;
+    if(items && items.length) window.lpParkSale();
+    items = (p.items || []).slice();
+    if(typeof renderItems === 'function') renderItems();
+    if(typeof updateTotals === 'function') updateTotals();
+    if(p.cardNumber && typeof onCardEntered === 'function'){
+      const ci = document.getElementById('cardInput');
+      if(ci) ci.value = p.cardNumber;
+      onCardEntered(p.cardNumber);
+    }
+    arr.splice(idx, 1);
+    saveP(arr);
+    renderBar();
+    renderList();
+  }
+  function delOne(idx){
+    const arr = loadP();
+    arr.splice(idx, 1);
+    saveP(arr);
+    renderBar();
+    renderList();
+  }
+  setTimeout(renderBar, 200);
+
+  /* ═══ CONFIRMATION ═══ */
+  window.lpOpenConfirm = function(){
+    if(!items.length) return;
+    const final = items.reduce((s,i)=>s+i.final, 0);
+    document.getElementById('lpCmAmount').textContent = final.toFixed(2) + ' €';
+    document.getElementById('lpCmSub').textContent = items.length + ' артикул' + (items.length > 1 ? 'а' : '');
+    document.getElementById('lpConfirm').style.display = 'flex';
+  };
+  window.lpCloseConfirm = function(){
+    document.getElementById('lpConfirm').style.display = 'none';
+  };
+  window.lpConfirmSave = function(){
+    lpCloseConfirm();
+    if(saveBtn) saveBtn.click();
+  };
+})();
 
 </script>
+<!-- ═══════════════════════════════════════════════════════════════
+     S6 STICKY NUMPAD (от sale.php pattern) — заменя native клавиатура
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="lp-numpad-zone" id="lpNumpadZone">
+  <div class="lp-numpad-ctx">
+    <span class="lp-ctx-label lp-ctx-code" id="lpCtxLabel">КОД</span>
+  </div>
+  <div class="lp-parked-bar" id="lpParkedBar" style="display:none" onclick="lpTogglePark()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+    <span><b id="lpParkedCnt">0</b> паркирани</span>
+    <span style="margin-left:auto">›</span>
+  </div>
+  <div class="lp-parked-list" id="lpParkedList"></div>
+  <div class="lp-numpad-grid">
+    <button class="lp-np" onclick="lpNumPress('1')">1</button>
+    <button class="lp-np" onclick="lpNumPress('2')">2</button>
+    <button class="lp-np" onclick="lpNumPress('3')">3</button>
+    <button class="lp-np fn" onclick="lpNumPress('back')">⌫</button>
+
+    <button class="lp-np" onclick="lpNumPress('4')">4</button>
+    <button class="lp-np" onclick="lpNumPress('5')">5</button>
+    <button class="lp-np" onclick="lpNumPress('6')">6</button>
+    <button class="lp-np fn lp-cena" onclick="lpSetCtx('price')" id="lpBtnCena">ЦЕНА</button>
+
+    <button class="lp-np" onclick="lpNumPress('7')">7</button>
+    <button class="lp-np" onclick="lpNumPress('8')">8</button>
+    <button class="lp-np" onclick="lpNumPress('9')">9</button>
+    <button class="lp-np fn lp-cena" onclick="lpSetCtx('code')" id="lpBtnCod">КОД</button>
+
+    <button class="lp-np" onclick="lpNumPress('.')">.</button>
+    <button class="lp-np" onclick="lpNumPress('0')">0</button>
+    <button class="lp-np fn clear" onclick="lpNumPress('C')">C</button>
+    <button class="lp-np fn lp-park" onclick="lpParkSale()">ПАРКИРАЙ</button>
+
+    <button class="lp-np lp-add" onclick="if(addBtn) addBtn.click();">+ Добави</button>
+    <button class="lp-np lp-finish" onclick="lpOpenConfirm()">Приключи</button>
+  </div>
+</div>
+
+<!-- Confirmation modal -->
+<div id="lpConfirm" class="lp-confirm" style="display:none">
+  <div class="lp-confirm-bg" onclick="lpCloseConfirm()"></div>
+  <div class="lp-confirm-box">
+    <div class="lp-cm-icon">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <div class="lp-cm-title">Приключи продажбата?</div>
+    <div class="lp-cm-sub" id="lpCmSub">— артикула</div>
+    <div class="lp-cm-amount" id="lpCmAmount">0.00 €</div>
+    <div class="lp-cm-sub">Сигурен ли си?</div>
+    <div class="lp-cm-actions">
+      <button class="lp-cm-btn lp-cm-no" onclick="lpCloseConfirm()">Не</button>
+      <button class="lp-cm-btn lp-cm-yes" onclick="lpConfirmSave()">Да, запиши</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
