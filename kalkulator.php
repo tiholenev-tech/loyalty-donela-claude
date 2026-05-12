@@ -1470,6 +1470,12 @@ body.lp-keypad-open{padding-bottom:300px !important}
   text-align:center !important;
 }
 
+.lp-cm-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:10px}
+.lp-cm-btn.lp-cm-print{
+  background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;
+  box-shadow:0 4px 12px rgba(99,102,241,.4);
+}
+
 </style>
 </head>
 <body>
@@ -3162,6 +3168,65 @@ setTimeout(restoreSessionState, 200);
     lpCloseConfirm();
     if(saveBtn) saveBtn.click();
   };
+
+  /* ═══ PRINT RECEIPT (string concat, без template literal) ═══ */
+  window.lpPrintReceipt = function(){
+    if(!items.length) return;
+    var final = items.reduce(function(s,i){return s+i.final;}, 0);
+    var base  = items.reduce(function(s,i){return s+i.base;}, 0);
+    var disc  = base - final;
+    var fmt   = function(n){ return parseFloat(n).toFixed(2) + ' \u20ac'; };
+
+    var rows = '';
+    items.forEach(function(it){
+      var code = it.code || '?';
+      var brand = it.brand || '';
+      var qty = it.qty || 1;
+      var price = it.price || 0;
+      var finalIt = it.final || 0;
+      var isRet = qty < 0;
+      var sign = isRet ? '-' : '';
+      rows += '<tr><td>' + (isRet?'\u21BA ':'') + code + (brand?' '+brand:'') + '</td>';
+      rows += '<td style="text-align:right">' + sign + Math.abs(qty) + 'x' + price.toFixed(2) + '</td>';
+      rows += '<td style="text-align:right;font-weight:bold">' + sign + Math.abs(finalIt).toFixed(2) + '</td></tr>';
+    });
+
+    var time = new Date().toLocaleString('bg-BG');
+    var customer = (typeof scannedCustomerData !== 'undefined' && scannedCustomerData && scannedCustomerData.name) ? scannedCustomerData.name : '';
+    var location = (typeof LOCATION_NAME !== 'undefined') ? LOCATION_NAME : '';
+
+    var css = 'body{font-family:monospace;font-size:11px;width:280px;margin:8px auto;color:#000}'
+      + 'h2{text-align:center;font-size:14px;margin:4px 0 2px}'
+      + '.sub{text-align:center;font-size:10px;color:#444;margin-bottom:6px}'
+      + '.line{border-top:1px dashed #000;margin:6px 0}'
+      + 'table{width:100%;border-collapse:collapse;font-size:10px}'
+      + 'td{padding:2px 0}'
+      + '.total{font-size:14px;font-weight:bold;text-align:right;margin-top:8px}'
+      + '.foot{text-align:center;font-size:9px;color:#666;margin-top:12px}'
+      + '@media print{body{margin:0;width:auto}}';
+
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Разписка</title>'
+      + '<style>' + css + '</style></head><body>'
+      + '<h2>ДОНЕЛА</h2>'
+      + '<div class="sub">' + location + '</div>'
+      + '<div class="sub">' + time + '</div>'
+      + (customer ? '<div class="sub">Клиент: ' + customer + '</div>' : '')
+      + '<div class="line"></div>'
+      + '<table>' + rows + '</table>'
+      + '<div class="line"></div>'
+      + (disc > 0 ? '<div style="text-align:right">Без отстъпка: ' + fmt(final + disc) + '</div>' : '')
+      + (disc > 0 ? '<div style="text-align:right;color:#c00">Отстъпка: -' + fmt(disc) + '</div>' : '')
+      + '<div class="total">ОБЩО: ' + fmt(final) + '</div>'
+      + '<div class="foot">Благодарим за покупката!</div>'
+      + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},200);}</scr' + 'ipt>'
+      + '</body></html>';
+
+    var w = window.open('', '_blank', 'width=380,height=600');
+    if(!w){ alert('Pop-up блокиран — разреши изскачащи прозорци'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
 })();
 
 </script>
@@ -3226,7 +3291,8 @@ setTimeout(restoreSessionState, 200);
     <div class="lp-cm-sub">Сигурен ли си?</div>
     <div class="lp-cm-actions">
       <button class="lp-cm-btn lp-cm-no" onclick="lpCloseConfirm()">Не</button>
-      <button class="lp-cm-btn lp-cm-yes" onclick="lpConfirmSave()">Да, запиши</button>
+      <button class="lp-cm-btn lp-cm-print" onclick="lpPrintReceipt()">Печат</button>
+      <button class="lp-cm-btn lp-cm-yes" onclick="lpConfirmSave()">Да</button>
     </div>
   </div>
 </div>
