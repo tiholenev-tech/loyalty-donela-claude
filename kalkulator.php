@@ -1957,7 +1957,8 @@ codeInput.addEventListener('keydown', e => {
   }
 });
 
-/* Trigger 3: debounced при input (като пише — 600ms след спирането) */
+/* S6 FIX: НЕ правим lookup на input event (избягва flashing при кодове 10520, 10520.1...)
+   Lookup-ът сега се прави САМО при натискане на ЦЕНА бутона (виж lpSetCtx по-долу). */
 let _lookupTimer = null;
 codeInput.addEventListener('input', () => {
   /* S9.CLEAR: ако код стане празен → изчисти auto-filled полета + picker */
@@ -1975,8 +1976,7 @@ codeInput.addEventListener('input', () => {
     if(_lookupTimer) clearTimeout(_lookupTimer);
     return;
   }
-  if(_lookupTimer) clearTimeout(_lookupTimer);
-  _lookupTimer = setTimeout(() => autoFillFromCode(codeInput.value), 600);
+  /* НЕ trigger-ваме autoFillFromCode тук — само при ЦЕНА бутон */
 });
 
 /* S9.MANUAL: при ръчна промяна на цена/марка → маркер че не е auto-fill */
@@ -2944,6 +2944,13 @@ setTimeout(restoreSessionState, 200);
       if(typeof s9dbg === 'function') s9dbg('Първо въведи КОД!', 'rgba(200,80,0,.9)');
       if(navigator.vibrate) try { navigator.vibrate([20,40,20]); } catch(e){}
       ctx = 'code'; // принудително връща на код
+    }
+    /* S6 FIX (final): при превключване КОД → ЦЕНА → ЕДНОКРАТЕН lookup
+       (без flashing при дълги кодове 10520, 10520.1, 10520.11) */
+    if(ctx === 'price' && codeInput.value.trim() && lpCtx === 'code'){
+      if(typeof autoFillFromCode === 'function'){
+        autoFillFromCode(codeInput.value.trim());
+      }
     }
     lpCtx = ctx;
     const lbl = document.getElementById('lpCtxLabel');
