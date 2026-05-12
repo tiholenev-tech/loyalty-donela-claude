@@ -1450,6 +1450,26 @@ body{transition:padding-bottom .25s ease}
 .lp-numpad-zone{padding:6px 6px calc(8px + env(safe-area-inset-bottom,0px)) !important}
 body.lp-keypad-open{padding-bottom:300px !important}
 
+/* ═══════════════════════════════════════════════════════════════
+   S6 LAYOUT: Код пълна ширина горе, Производител + Цена под
+   ═══════════════════════════════════════════════════════════════ */
+.row-top{
+  display:grid !important;
+  grid-template-columns:1fr 1fr !important;
+  gap:8px;
+}
+.row-top > div:nth-child(1){
+  grid-column:1 / -1 !important;
+}
+.row-top > div:nth-child(1) .f-input{
+  font-size:24px !important;
+  font-weight:900 !important;
+  font-family:monospace !important;
+  height:62px !important;
+  letter-spacing:.08em !important;
+  text-align:center !important;
+}
+
 </style>
 </head>
 <body>
@@ -1959,8 +1979,7 @@ codeInput.addEventListener('keydown', e => {
   }
 });
 
-/* S6 FIX: НЕ правим lookup на input event (избягва flashing при кодове 10520, 10520.1...)
-   Lookup-ът сега се прави САМО при натискане на ЦЕНА бутона (виж lpSetCtx по-долу). */
+/* S6 RESTORED: debounced при input (auto-fill при пауза 800ms) */
 let _lookupTimer = null;
 codeInput.addEventListener('input', () => {
   /* S9.CLEAR: ако код стане празен → изчисти auto-filled полета + picker */
@@ -1978,7 +1997,8 @@ codeInput.addEventListener('input', () => {
     if(_lookupTimer) clearTimeout(_lookupTimer);
     return;
   }
-  /* НЕ trigger-ваме autoFillFromCode тук — само при ЦЕНА бутон */
+  if(_lookupTimer) clearTimeout(_lookupTimer);
+  _lookupTimer = setTimeout(() => autoFillFromCode(codeInput.value), 800);
 });
 
 /* S9.MANUAL: при ръчна промяна на цена/марка → маркер че не е auto-fill */
