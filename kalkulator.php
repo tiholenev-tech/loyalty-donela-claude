@@ -1476,6 +1476,22 @@ body.lp-keypad-open{padding-bottom:300px !important}
   box-shadow:0 4px 12px rgba(99,102,241,.4);
 }
 
+/* PIN overlay */
+.pin-overlay{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.85);backdrop-filter:blur(12px)}
+.pin-box{width:100%;max-width:340px;padding:24px 20px;background:linear-gradient(180deg,#1e293b,#0f172a);border:1px solid rgba(99,102,241,.3);border-radius:24px;box-shadow:0 20px 60px rgba(0,0,0,.6);text-align:center}
+.pin-icon{width:60px;height:60px;border-radius:50%;margin:0 auto 10px;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(99,102,241,.4)}
+.pin-title{font:900 18px/1.2 'Montserrat',sans-serif;color:#f1f5f9;margin-bottom:4px}
+.pin-sub{font:700 11px/1.3 'Montserrat',sans-serif;color:#94a3b8;margin-bottom:14px}
+.pin-dots{display:flex;justify-content:center;gap:12px;margin-bottom:12px;min-height:14px}
+.pin-dot{width:14px;height:14px;border-radius:50%;background:rgba(99,102,241,.2);border:1.5px solid rgba(99,102,241,.4);transition:all .15s}
+.pin-dot.filled{background:linear-gradient(135deg,#6366f1,#a855f7);border-color:#a855f7;box-shadow:0 0 8px rgba(168,85,247,.5)}
+.pin-err{font:800 11px/1 'Montserrat',sans-serif;color:#f87171;margin-bottom:10px;padding:6px 12px;background:rgba(248,113,113,.1);border-radius:8px;letter-spacing:.04em;text-transform:uppercase}
+.pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.pin-btn{height:50px;border:none;border-radius:14px;cursor:pointer;background:rgba(15,23,42,.7);color:#f1f5f9;font:900 22px/1 monospace;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:all .1s}
+.pin-btn:active{background:rgba(99,102,241,.3);transform:scale(.95)}
+.pin-btn.pin-fn{font-size:14px;color:#94a3b8}
+.pin-cancel{padding:8px 16px;border:1px solid rgba(248,113,113,.4);border-radius:10px;background:transparent;color:#f87171;font:800 12px/1 'Montserrat',sans-serif;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+
 </style>
 </head>
 <body>
@@ -1675,10 +1691,10 @@ body.lp-keypad-open{padding-bottom:300px !important}
     <div class="hs red"><div class="hk">Отстъпка</div><div class="hv" id="hDisc">—</div></div>
   </div>
 
-  <button class="fullscreen-btn" onclick="openFullscreen()">
+  <button class="fullscreen-btn" onclick="pinRequire(openFullscreen)">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg><span>Виж обобщението за преписване</span>
   </button>
-  <button class="print-btn" onclick="printHistory()" style="margin-top:8px">
+  <button class="print-btn" onclick="pinRequire(printHistory)" style="margin-top:8px">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg><span>Печат на историята за деня</span>
   </button>
 
@@ -2959,6 +2975,76 @@ window.addEventListener('beforeunload', saveSessionState);
 window.addEventListener('pagehide', saveSessionState);
 setTimeout(restoreSessionState, 200);
 
+/* ═══ PIN PROTECTION (hardcoded 7878, session 4ч) ═══ */
+(function(){
+  var FIXED_PIN = '7878';
+  var SESSION_HOURS = 4;
+  var pinCurrent = '';
+  var pinCallback = null;
+  var dots, errEl, overlay;
+
+  function init(){
+    overlay = document.getElementById('pinOverlay');
+    if(!overlay) return;
+    dots = overlay.querySelectorAll('.pin-dot');
+    errEl = document.getElementById('pinErr');
+    overlay.querySelectorAll('.pin-btn[data-pk]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var k = btn.dataset.pk;
+        if(k === 'back') pinCurrent = pinCurrent.slice(0, -1);
+        else if(k === 'C') pinCurrent = '';
+        else if(/^\d$/.test(k) && pinCurrent.length < 4) pinCurrent += k;
+        updateDots();
+        if(navigator.vibrate) try { navigator.vibrate(8); } catch(e){}
+        if(pinCurrent.length === 4) setTimeout(submitPin, 200);
+      });
+    });
+  }
+  function updateDots(){
+    dots.forEach(function(d, i){ d.classList.toggle('filled', i < pinCurrent.length); });
+  }
+  function showErr(){
+    errEl.style.display = 'block';
+    if(navigator.vibrate) try { navigator.vibrate([60,30,60]); } catch(e){}
+    setTimeout(function(){ errEl.style.display = 'none'; }, 2200);
+  }
+  function submitPin(){
+    if(pinCurrent === FIXED_PIN){
+      try { localStorage.setItem('loyalty_pin_ok', String(Date.now())); } catch(e){}
+      overlay.style.display = 'none';
+      var cb = pinCallback;
+      pinCallback = null;
+      pinCurrent = ''; updateDots();
+      if(cb) try { cb(); } catch(e){}
+    } else {
+      pinCurrent = ''; updateDots();
+      showErr();
+    }
+  }
+  function sessionOK(){
+    try {
+      var ts = parseInt(localStorage.getItem('loyalty_pin_ok') || '0', 10);
+      if(!ts) return false;
+      return (Date.now() - ts) / 1000 / 3600 < SESSION_HOURS;
+    } catch(e){ return false; }
+  }
+
+  window.pinRequire = function(callback){
+    if(sessionOK()){ if(callback) callback(); return; }
+    pinCallback = callback;
+    pinCurrent = ''; updateDots(); errEl.style.display = 'none';
+    overlay.style.display = 'flex';
+  };
+  window.pinCancel = function(){
+    overlay.style.display = 'none';
+    pinCurrent = ''; updateDots();
+    pinCallback = null;
+  };
+
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
 /* ═══════════════════════════════════════════════════════════════
    S6 STICKY NUMPAD — JS (от sale.php pattern, adapted за loyalty)
    ═══════════════════════════════════════════════════════════════ */
@@ -3294,6 +3380,39 @@ setTimeout(restoreSessionState, 200);
       <button class="lp-cm-btn lp-cm-print" onclick="lpPrintReceipt()">Печат</button>
       <button class="lp-cm-btn lp-cm-yes" onclick="lpConfirmSave()">Да</button>
     </div>
+  </div>
+</div>
+
+<!-- S6: PIN overlay (hardcoded 7878) -->
+<div id="pinOverlay" class="pin-overlay" style="display:none">
+  <div class="pin-box">
+    <div class="pin-icon">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    </div>
+    <div class="pin-title">Въведи PIN</div>
+    <div class="pin-sub">За достъп до отчетите</div>
+    <div class="pin-dots">
+      <span class="pin-dot" data-d="1"></span>
+      <span class="pin-dot" data-d="2"></span>
+      <span class="pin-dot" data-d="3"></span>
+      <span class="pin-dot" data-d="4"></span>
+    </div>
+    <div class="pin-err" id="pinErr" style="display:none">Грешен PIN</div>
+    <div class="pin-grid">
+      <button type="button" class="pin-btn" data-pk="1">1</button>
+      <button type="button" class="pin-btn" data-pk="2">2</button>
+      <button type="button" class="pin-btn" data-pk="3">3</button>
+      <button type="button" class="pin-btn" data-pk="4">4</button>
+      <button type="button" class="pin-btn" data-pk="5">5</button>
+      <button type="button" class="pin-btn" data-pk="6">6</button>
+      <button type="button" class="pin-btn" data-pk="7">7</button>
+      <button type="button" class="pin-btn" data-pk="8">8</button>
+      <button type="button" class="pin-btn" data-pk="9">9</button>
+      <button type="button" class="pin-btn pin-fn" data-pk="C">C</button>
+      <button type="button" class="pin-btn" data-pk="0">0</button>
+      <button type="button" class="pin-btn pin-fn" data-pk="back">⌫</button>
+    </div>
+    <button type="button" class="pin-cancel" onclick="pinCancel()">Отказ</button>
   </div>
 </div>
 
