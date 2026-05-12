@@ -3030,7 +3030,7 @@ setTimeout(restoreSessionState, 200);
   }
 
   window.pinRequire = function(callback){
-    if(sessionOK()){ if(callback) callback(); return; }
+    /* S6: винаги пита PIN (без session cache) */
     pinCallback = callback;
     pinCurrent = ''; updateDots(); errEl.style.display = 'none';
     overlay.style.display = 'flex';
