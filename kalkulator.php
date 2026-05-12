@@ -318,7 +318,9 @@ if ($ajax === 'history') {
             foreach ($items as $item) {
                 $code  = trim((string)($item['code']  ?? ''));
                 $brand = trim((string)($item['brand'] ?? ''));
-                $qty   = max(1, (int)($item['qty']    ?? 1));
+                /* S6 FIX: позволи негативни qty за връщания (преди max(1,..) ги превръщаше в +) */
+                $qty   = (int)($item['qty'] ?? 1);
+                if ($qty === 0) $qty = 1;
                 $price = round((float)($item['price'] ?? 0), 2);
                 $disc  = (int)($item['disc'] ?? 0);
                 $base  = round((float)($item['base']  ?? $qty * $price), 2);
