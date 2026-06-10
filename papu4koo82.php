@@ -734,10 +734,77 @@ if ($ajax === 'stats_all') {
         /* По обект (breakdown без NULL филтър — fix на стария бъг) */
         $s = $pdo->prepare("SELECT COALESCE(NULLIF(location_name,''),'— без обект —') location_name,
             location_id, COALESCE(SUM(amount),0) total, COUNT(*) cnt,
-            COALESCE(AVG(amount),0) avg_amt
+            COALESCE(AVG(amount),0) avg_amt, COALESCE(SUM(discount_amount),0) disc
             FROM purchase_scans WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to $locCond
             GROUP BY location_id, location_name ORDER BY total DESC");
         $s->execute($P); $byLoc = $s->fetchAll(PDO::FETCH_ASSOC);
+
+        /* ── 💸 Отстъпки в дълбочина ── */
+        $ds = $pdo->prepare("SELECT COUNT(*) cnt_disc, COALESCE(AVG(discount_amount),0) avg_on
+            FROM purchase_scans WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to $locCond AND discount_amount > 0");
+        $ds->execute($P); $discRow = $ds->fetch(PDO::FETCH_ASSOC);
+
+        /* ── Карта vs без карта ── */
+        $cs = $pdo->prepare("SELECT has_card, COUNT(*) cnt, COALESCE(SUM(amount),0) net,
+            COALESCE(SUM(discount_amount),0) disc, COALESCE(AVG(amount),0) avg_amt
+            FROM purchase_scans WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to $locCond
+            GROUP BY has_card");
+        $cs->execute($P); $cardRows = $cs->fetchAll(PDO::FETCH_ASSOC);
+
+        /* ── 🛒 Кошница + топ артикули (от calc_payload JSON) ── */
+        $basketSales = 0; $basketQty = 0.0; $basketLines = 0;
+        $prodAgg = []; $brandAgg = [];
+        try {
+            $ps = $pdo->prepare("SELECT calc_payload FROM purchase_scans
+                WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to $locCond
+                  AND calc_payload IS NOT NULL AND calc_payload <> ''");
+            $ps->execute($P);
+            while (($pl = $ps->fetchColumn()) !== false) {
+                $items = json_decode((string)$pl, true);
+                if (!is_array($items) || !$items) continue;
+                $basketSales++;
+                foreach ($items as $it) {
+                    $code  = trim((string)($it['code']  ?? ''));
+                    $brand = trim((string)($it['brand'] ?? ''));
+                    $qty   = (float)($it['qty'] ?? 0); if ($qty == 0) $qty = 1;
+                    $price = (float)($it['price'] ?? 0);
+                    $final = isset($it['final']) ? (float)$it['final'] : $qty * $price;
+                    $basketLines++; $basketQty += $qty;
+                    if ($code !== '') {
+                        if (!isset($prodAgg[$code])) $prodAgg[$code] = ['code'=>$code,'brand'=>$brand,'qty'=>0.0,'rev'=>0.0];
+                        $prodAgg[$code]['qty'] += $qty; $prodAgg[$code]['rev'] += $final;
+                        if ($brand && !$prodAgg[$code]['brand']) $prodAgg[$code]['brand'] = $brand;
+                    }
+                    if ($brand !== '') {
+                        if (!isset($brandAgg[$brand])) $brandAgg[$brand] = ['brand'=>$brand,'qty'=>0.0,'rev'=>0.0];
+                        $brandAgg[$brand]['qty'] += $qty; $brandAgg[$brand]['rev'] += $final;
+                    }
+                }
+            }
+        } catch (Throwable $e) {}
+        $fmtItems = fn($arr) => array_map(fn($p) => [
+            'code'=>$p['code'] ?? '', 'brand'=>$p['brand'] ?? '',
+            'qty'=>round($p['qty'],2), 'rev'=>round($p['rev'],2)
+        ], $arr);
+        $prodByRev = array_values($prodAgg); usort($prodByRev, fn($a,$b)=>$b['rev']<=>$a['rev']);
+        $prodByQty = array_values($prodAgg); usort($prodByQty, fn($a,$b)=>$b['qty']<=>$a['qty']);
+        $brandByRev= array_values($brandAgg); usort($brandByRev, fn($a,$b)=>$b['rev']<=>$a['rev']);
+        $topProdRev = $fmtItems(array_slice($prodByRev, 0, 10));
+        $topProdQty = $fmtItems(array_slice($prodByQty, 0, 10));
+        $topBrands  = $fmtItems(array_slice($brandByRev, 0, 10));
+        $avgBasketQty   = $basketSales > 0 ? round($basketQty / $basketSales, 1) : 0;
+        $avgBasketLines = $basketSales > 0 ? round($basketLines / $basketSales, 1) : 0;
+
+        /* ── 📈 Ръст спрямо предходния период (същия брой дни преди него) ── */
+        $curStartTs = strtotime($dateFrom);
+        $prevStart  = date('Y-m-d 00:00:00', $curStartTs - $days * 86400);
+        $prevEnd    = date('Y-m-d 23:59:59', $curStartTs - 86400);
+        $pp = ['from'=>$prevStart, 'to'=>$prevEnd]; if ($loc > 0) $pp['loc'] = $loc;
+        $pq = $pdo->prepare("SELECT COALESCE(SUM(amount),0) total, COUNT(*) cnt
+            FROM purchase_scans WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to $locCond");
+        $pq->execute($pp); $prevSales = $pq->fetch(PDO::FETCH_ASSOC);
+        $prq = $pdo->prepare("SELECT COUNT(*) FROM customers WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to");
+        $prq->execute(['from'=>$prevStart, 'to'=>$prevEnd]); $prevReg = (int)$prq->fetchColumn();
 
         /* Регистрации по магазин (класация) — по обекта, в който е направена картата */
         $regByLoc = [];
@@ -827,6 +894,25 @@ if ($ajax === 'stats_all') {
             'by_day'      => $byDay,
             'by_loc'      => $byLoc,
             'reg_by_loc'  => $regByLoc,
+            'discount_deep' => [
+                'avg_per_sale'      => (int)$core['cnt'] > 0 ? round((float)$core['disc'] / (int)$core['cnt'], 2) : 0,
+                'sales_with_disc'   => (int)$discRow['cnt_disc'],
+                'pct_sales_disc'    => (int)$core['cnt'] > 0 ? round((int)$discRow['cnt_disc'] / (int)$core['cnt'] * 100, 1) : 0,
+                'avg_on_discounted' => round((float)$discRow['avg_on'], 2),
+            ],
+            'by_card' => array_map(fn($r) => [
+                'has_card'=>(int)$r['has_card'], 'cnt'=>(int)$r['cnt'],
+                'net'=>round((float)$r['net'],2), 'disc'=>round((float)$r['disc'],2),
+                'avg_amt'=>round((float)$r['avg_amt'],2),
+            ], $cardRows),
+            'basket' => ['sales'=>$basketSales, 'avg_qty'=>$avgBasketQty, 'avg_lines'=>$avgBasketLines],
+            'top_products_rev' => $topProdRev,
+            'top_products_qty' => $topProdQty,
+            'top_brands'       => $topBrands,
+            'growth' => [
+                'prev_total'=>round((float)$prevSales['total'],2), 'prev_cnt'=>(int)$prevSales['cnt'], 'prev_reg'=>$prevReg,
+                'cur_total'=>round((float)$core['total'],2), 'cur_cnt'=>(int)$core['cnt'], 'cur_reg'=>$newCust,
+            ],
             'customers'   => [
                 'new'            => $newCust,
                 'dormant_30'     => $dormant,
@@ -1364,6 +1450,27 @@ textarea.form-input{resize:vertical;min-height:80px}
   <!-- Финансови карти -->
   <div class="card-title" style="margin-bottom:10px">💰 Пари</div>
   <div class="stats-grid" id="statsMoney"><div class="loading">Зареждане...</div></div>
+
+  <!-- Ръст спрямо минал период -->
+  <div class="card-title" style="margin:20px 0 10px">📈 Ръст спрямо предходния период</div>
+  <div class="stats-grid" id="statsGrowth"></div>
+
+  <!-- Отстъпки в дълбочина -->
+  <div class="card-title" style="margin:20px 0 10px">💸 Отстъпки в дълбочина</div>
+  <div class="stats-grid" id="statsDiscount"></div>
+  <div class="card" id="statsByCard" style="margin-top:12px"></div>
+
+  <!-- Кошница + топ артикули -->
+  <div class="card-title" style="margin:20px 0 10px">🛒 Кошница</div>
+  <div class="stats-grid" id="statsBasket"></div>
+  <div class="stats-two" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+    <div class="card"><div class="card-title" style="font-size:13px">Топ артикули по брой</div><div class="table-wrap"><table><thead><tr><th>#</th><th>Код</th><th>Бр.</th><th>Оборот</th></tr></thead><tbody id="statsTopProdQty"></tbody></table></div></div>
+    <div class="card"><div class="card-title" style="font-size:13px">Топ артикули по оборот</div><div class="table-wrap"><table><thead><tr><th>#</th><th>Код</th><th>Бр.</th><th>Оборот</th></tr></thead><tbody id="statsTopProdRev"></tbody></table></div></div>
+  </div>
+  <div class="card" id="statsTopBrandsCard" style="margin-top:12px">
+    <div class="card-title" style="font-size:13px">🏭 Топ марки / производители</div>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>Марка</th><th>Бр.</th><th>Оборот</th></tr></thead><tbody id="statsTopBrands"></tbody></table></div>
+  </div>
 
   <!-- Клиенти карти -->
   <div class="card-title" style="margin:20px 0 10px">👥 Клиенти</div>
@@ -2182,12 +2289,12 @@ async function loadStats(){
   /* Обекти breakdown */
   const locRows = d.by_loc || [];
   const totalSum = locRows.reduce((a,b) => a + Number(b.total), 0);
-  let locHtml = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Обект</th><th>Покупки</th><th>Оборот</th><th>Средно</th><th>% от общото</th></tr></thead><tbody>';
+  let locHtml = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Обект</th><th>Покупки</th><th>Оборот</th><th>Средно</th><th>Отстъпка</th><th>% от общото</th></tr></thead><tbody>';
   locRows.forEach((l,i) => {
     const pct = totalSum > 0 ? ((Number(l.total)/totalSum)*100).toFixed(1) : '0.0';
-    locHtml += `<tr><td><span class="badge badge-gray">#${i+1}</span></td><td><strong>${esc(l.location_name)}</strong></td><td>${l.cnt}</td><td style="font-weight:800">${euroFmt(l.total)}</td><td>${euroFmt(l.avg_amt)}</td><td>${pct}%</td></tr>`;
+    locHtml += `<tr><td><span class="badge badge-gray">#${i+1}</span></td><td><strong>${esc(l.location_name)}</strong></td><td>${l.cnt}</td><td style="font-weight:800">${euroFmt(l.total)}</td><td>${euroFmt(l.avg_amt)}</td><td style="color:var(--red)">${euroFmt(l.disc||0)}</td><td>${pct}%</td></tr>`;
   });
-  if(locRows.length === 0) locHtml += '<tr><td colspan="6" class="empty">Няма данни</td></tr>';
+  if(locRows.length === 0) locHtml += '<tr><td colspan="7" class="empty">Няма данни</td></tr>';
   locHtml += '</tbody></table></div>';
   document.getElementById('statsLocCard').innerHTML = locHtml;
 
@@ -2204,6 +2311,59 @@ async function loadStats(){
   regHtml += '</tbody></table></div>';
   const _regEl = document.getElementById('statsRegByLoc');
   if(_regEl) _regEl.innerHTML = regHtml;
+
+  /* 📈 Ръст спрямо предходния период */
+  const g = d.growth || {};
+  const growthPct = (cur, prev) => {
+    if(!prev || prev === 0) return cur > 0 ? {txt:'нов', cls:'green'} : {txt:'—', cls:''};
+    const p = ((cur - prev) / prev) * 100;
+    return {txt:(p>=0?'+':'')+p.toFixed(1)+'%', cls:p>=0?'green':'red'};
+  };
+  const gT = growthPct(Number(g.cur_total||0), Number(g.prev_total||0));
+  const gC = growthPct(Number(g.cur_cnt||0),   Number(g.prev_cnt||0));
+  const gR = growthPct(Number(g.cur_reg||0),   Number(g.prev_reg||0));
+  document.getElementById('statsGrowth').innerHTML = `
+    <div class="stat-box ${gT.cls}"><div class="sb-label">Оборот</div><div class="sb-value">${gT.txt}</div><div class="sb-sub">${euroFmt(g.cur_total)} срещу ${euroFmt(g.prev_total)}</div></div>
+    <div class="stat-box ${gC.cls}"><div class="sb-label">Покупки</div><div class="sb-value">${gC.txt}</div><div class="sb-sub">${g.cur_cnt||0} срещу ${g.prev_cnt||0}</div></div>
+    <div class="stat-box ${gR.cls}"><div class="sb-label">Регистрации</div><div class="sb-value">${gR.txt}</div><div class="sb-sub">${g.cur_reg||0} срещу ${g.prev_reg||0}</div></div>
+  `;
+
+  /* 💸 Отстъпки в дълбочина */
+  const dd = d.discount_deep || {};
+  document.getElementById('statsDiscount').innerHTML = `
+    <div class="stat-box red"><div class="sb-label">Средна отстъпка / продажба</div><div class="sb-value">${euroFmt(dd.avg_per_sale)}</div><div class="sb-sub">Върху всички продажби</div></div>
+    <div class="stat-box yellow"><div class="sb-label">Продажби с отстъпка</div><div class="sb-value">${dd.pct_sales_disc||0}%</div><div class="sb-sub">${dd.sales_with_disc||0} продажби</div></div>
+    <div class="stat-box red"><div class="sb-label">Средно (само с отстъпка)</div><div class="sb-value">${euroFmt(dd.avg_on_discounted)}</div><div class="sb-sub">Без нулевите</div></div>
+    <div class="stat-box"><div class="sb-label">Обща отстъпка</div><div class="sb-value">${euroFmt(c.disc)}</div><div class="sb-sub">${d.disc_pct}% от брутното</div></div>
+  `;
+  /* С карта vs без карта */
+  const bc = d.by_card || [];
+  const cardRow = bc.find(x=>Number(x.has_card)===1) || {cnt:0,net:0,disc:0,avg_amt:0};
+  const noCardRow = bc.find(x=>Number(x.has_card)===0) || {cnt:0,net:0,disc:0,avg_amt:0};
+  const cardDiscPer = cardRow.cnt>0 ? (cardRow.disc/cardRow.cnt) : 0;
+  const noCardDiscPer = noCardRow.cnt>0 ? (noCardRow.disc/noCardRow.cnt) : 0;
+  document.getElementById('statsByCard').innerHTML = `
+    <div class="card-title" style="font-size:13px;margin-bottom:8px">С лоялна карта vs без карта</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>Продажби</th><th>Оборот</th><th>Средна покупка</th><th>Отстъпка/прод.</th></tr></thead>
+      <tbody>
+        <tr><td><strong>💳 С карта</strong></td><td>${cardRow.cnt}</td><td style="font-weight:800">${euroFmt(cardRow.net)}</td><td>${euroFmt(cardRow.avg_amt)}</td><td style="color:var(--red)">${euroFmt(cardDiscPer)}</td></tr>
+        <tr><td><strong>🚶 Без карта</strong></td><td>${noCardRow.cnt}</td><td style="font-weight:800">${euroFmt(noCardRow.net)}</td><td>${euroFmt(noCardRow.avg_amt)}</td><td style="color:var(--red)">${euroFmt(noCardDiscPer)}</td></tr>
+      </tbody>
+    </table></div>`;
+
+  /* 🛒 Кошница + топ артикули */
+  const bk = d.basket || {};
+  document.getElementById('statsBasket').innerHTML = `
+    <div class="stat-box blue"><div class="sb-label">Средно артикули / продажба</div><div class="sb-value">${bk.avg_qty||0}</div><div class="sb-sub">Брой бройки в кошницата</div></div>
+    <div class="stat-box"><div class="sb-label">Различни артикули / продажба</div><div class="sb-value">${bk.avg_lines||0}</div><div class="sb-sub">Отделни редове</div></div>
+    <div class="stat-box green"><div class="sb-label">Продажби с артикули</div><div class="sb-value">${bk.sales||0}</div><div class="sb-sub">С въведени артикули</div></div>
+  `;
+  const prodRow = (p,i) => `<tr><td>#${i+1}</td><td><strong>${esc(p.code||'—')}</strong>${p.brand?'<div style="font-size:11px;color:var(--text3)">'+esc(p.brand)+'</div>':''}</td><td style="font-weight:800">${p.qty}</td><td>${euroFmt(p.rev)}</td></tr>`;
+  const fillTbl = (id, rows, fn) => { const el=document.getElementById(id); if(el) el.innerHTML = (rows&&rows.length)? rows.map(fn).join('') : '<tr><td colspan="4" class="empty">Няма данни</td></tr>'; };
+  fillTbl('statsTopProdQty', d.top_products_qty, prodRow);
+  fillTbl('statsTopProdRev', d.top_products_rev, prodRow);
+  fillTbl('statsTopBrands', d.top_brands, (b,i)=>`<tr><td>#${i+1}</td><td><strong>${esc(b.brand||'—')}</strong></td><td style="font-weight:800">${b.qty}</td><td>${euroFmt(b.rev)}</td></tr>`);
 
   /* Top 10 by spend */
   const tSpend = d.top_spend || [];
