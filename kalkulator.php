@@ -1682,6 +1682,20 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
 .pin-btn.pin-fn{font-size:14px;color:#94a3b8}
 .pin-cancel{padding:8px 16px;border:1px solid rgba(248,113,113,.4);border-radius:10px;background:transparent;color:#f87171;font:800 12px/1 'Montserrat',sans-serif;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 
+/* RENAME_BRAND_v2 — избор-екран за производител (bottom sheet) */
+.bp-overlay{position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:flex-end;justify-content:center}
+.bp-box{width:100%;max-width:520px;max-height:82vh;background:#0f172a;border:1px solid #6366f1;border-bottom:none;border-radius:18px 18px 0 0;display:flex;flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.6)}
+.bp-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid rgba(99,102,241,.25)}
+.bp-head span{font:900 13px/1.3 'Montserrat',system-ui;color:#f1f5f9}
+.bp-close{width:32px;height:32px;border:none;border-radius:50%;background:rgba(248,113,113,.15);color:#f87171;font-size:20px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.bp-search{margin:12px 16px;padding:14px;border:1.5px solid #6366f1;border-radius:12px;background:#1e293b;color:#fff;font:600 16px 'Montserrat',system-ui;outline:none}
+.bp-search::placeholder{color:#64748b;font-weight:500}
+.bp-list{overflow-y:auto;padding:0 12px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:6px}
+.bp-item{padding:14px;border-radius:10px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);color:#e2e8f0;font:700 15px/1.2 'Montserrat',system-ui;cursor:pointer;text-align:left;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.bp-item:active{background:rgba(99,102,241,.22)}
+.bp-item.bp-add{background:linear-gradient(135deg,#16a34a,#22c55e);border:none;color:#fff;font-weight:900}
+.bp-item.bp-none{background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.3);color:#fca5a5}
+
 </style>
 </head>
 <body>
@@ -2184,6 +2198,55 @@ async function hideVariantNow(code, brand, price){
   } catch(e){ s9dbg('ERR ' + (e.message||e), 'rgba(200,0,0,.85)'); }
 }
 
+/* RENAME_BRAND_v2 — избор-екран за производител (търсачка + добави нов + списък) */
+let _bpCtx = null;
+window.openBrandPicker = function(code, oldBrand, price){
+  _bpCtx = {code: code, oldBrand: oldBrand, price: price};
+  const ov = document.getElementById('brandPicker');
+  if(!ov) return;
+  const t = document.getElementById('bpTitle');
+  if(t) t.textContent = 'Производител · ' + code + ' · ' + Number(price).toFixed(2) + ' €';
+  const s = document.getElementById('bpSearch');
+  if(s){ s.value = ''; s.oninput = () => renderBpList(s.value); }
+  /* затвори numpad-а, за да не пречи */
+  if(typeof lpCloseKeypad === 'function'){ try { lpCloseKeypad(); } catch(e){} }
+  ov.style.display = 'flex';
+  renderBpList('');
+  setTimeout(() => { try { s.focus(); } catch(e){} }, 120);
+};
+window.closeBrandPicker = function(){
+  const ov = document.getElementById('brandPicker');
+  if(ov) ov.style.display = 'none';
+  _bpCtx = null;
+};
+function renderBpList(q){
+  const list = document.getElementById('bpList');
+  if(!list) return;
+  q = String(q||'').trim();
+  const ql = q.toLowerCase();
+  const all = (typeof BRANDS !== 'undefined' ? BRANDS.slice() : []).sort((a,b)=>String(a).localeCompare(String(b),'bg'));
+  const matches = ql ? all.filter(b => String(b).toLowerCase().includes(ql)) : all;
+  const exact = all.some(b => String(b).toLowerCase() === ql);
+  list.innerHTML = '';
+  const mk = (label, cls, val) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'bp-item' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    b.onclick = (e) => { e.preventDefault(); bpPick(val); };
+    list.appendChild(b);
+  };
+  if(q && !exact) mk('➕ Добави „' + q + '"', 'bp-add', q);
+  mk('✕ Без марка', 'bp-none', '');
+  matches.forEach(b => mk(b, '', b));
+};
+window.bpPick = function(brand){
+  if(!_bpCtx) return;
+  const ctx = _bpCtx;
+  closeBrandPicker();
+  renameVariant(ctx.code, ctx.oldBrand, ctx.price, brand);
+};
+
 function showVariantPicker(variants){
   /* VARIANT_HIDE_v1 + PICKER_UX_v2 scroll-into-view */
   const pk = document.getElementById('s9VariantPicker');
@@ -2245,27 +2308,24 @@ function showVariantPicker(variants){
   }
   list.innerHTML = '';
   variants.forEach((v, idx) => {
-    /* РЕДАКЦИЯ (✎ режим): ред с поле за марка/производител + Запази + Скрий */
+    /* РЕДАКЦИЯ (✎ режим): бутон „Марка" (отваря избор-екран) + цена + Скрий */
     if(_hideModeActive){
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;margin-bottom:6px';
-      const inp = document.createElement('input');
-      inp.type = 'text'; inp.setAttribute('list','brandsDatalist');
-      inp.value = v.brand || ''; inp.placeholder = 'марка / производител';
-      inp.autocapitalize = 'words'; inp.autocomplete = 'off';
-      inp.style.cssText = 'flex:1;min-width:0;padding:9px 10px;border:1.5px solid #6366f1;border-radius:8px;font:600 13px system-ui;color:#1e293b;background:#fff';
+      const brandBtn = document.createElement('button');
+      brandBtn.type = 'button';
+      const curLabel = v.brand ? v.brand : '— задай марка —';
+      brandBtn.innerHTML = '<span style="opacity:.55;font-weight:600">Марка:</span> ' + esc(curLabel);
+      brandBtn.style.cssText = 'flex:1;min-width:0;text-align:left;padding:11px 12px;border:1.5px solid #6366f1;border-radius:10px;background:' + (v.brand ? '#eef2ff' : '#fff7ed') + ';color:#1e293b;font:700 13px system-ui;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;touch-action:manipulation';
+      brandBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openBrandPicker(codeInput.value.trim(), v.brand || '', v.price); };
       const pr = document.createElement('span');
       pr.style.cssText = 'font:900 12px monospace;color:#94a3b8;white-space:nowrap';
       pr.textContent = v.price.toFixed(2) + ' € ×' + v.use_count;
-      const saveB = document.createElement('button');
-      saveB.type = 'button'; saveB.textContent = 'Запази';
-      saveB.style.cssText = 'padding:9px 10px;border:none;border-radius:8px;background:#16a34a;color:#fff;font:900 11px system-ui;cursor:pointer;white-space:nowrap;touch-action:manipulation';
-      saveB.onclick = (e) => { e.preventDefault(); e.stopPropagation(); renameVariant(codeInput.value.trim(), v.brand || '', v.price, inp.value); };
       const delB = document.createElement('button');
       delB.type = 'button'; delB.textContent = 'Скрий';
-      delB.style.cssText = 'padding:9px 10px;border:1px solid #dc2626;border-radius:8px;background:#fff;color:#dc2626;font:900 11px system-ui;cursor:pointer;white-space:nowrap;touch-action:manipulation';
+      delB.style.cssText = 'padding:11px 12px;border:1px solid #dc2626;border-radius:10px;background:#fff;color:#dc2626;font:900 11px system-ui;cursor:pointer;white-space:nowrap;touch-action:manipulation';
       delB.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hideVariantNow(codeInput.value.trim(), v.brand || '', v.price); };
-      row.appendChild(inp); row.appendChild(pr); row.appendChild(saveB); row.appendChild(delB);
+      row.appendChild(brandBtn); row.appendChild(pr); row.appendChild(delB);
       list.appendChild(row);
       return;
     }
@@ -4010,6 +4070,18 @@ setTimeout(restoreSessionState, 200);
       <button class="lp-cm-btn lp-cm-print" onclick="lpPrintReceipt()">Печат</button>
       <button class="lp-cm-btn lp-cm-yes" onclick="lpConfirmSave()">Да</button>
     </div>
+  </div>
+</div>
+
+<!-- RENAME_BRAND_v2: избор-екран за производител -->
+<div id="brandPicker" class="bp-overlay" style="display:none">
+  <div class="bp-box">
+    <div class="bp-head">
+      <span id="bpTitle">Производител</span>
+      <button type="button" class="bp-close" onclick="closeBrandPicker()" aria-label="Затвори">×</button>
+    </div>
+    <input id="bpSearch" class="bp-search" type="text" inputmode="text" placeholder="Търси или въведи нов производител..." autocomplete="off" autocapitalize="words">
+    <div id="bpList" class="bp-list"></div>
   </div>
 </div>
 
