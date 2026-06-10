@@ -2272,11 +2272,10 @@ function showVariantPicker(variants){
     const editBtn = document.createElement('button');
     editBtn.id = 's9EditToggle';
     editBtn.type = 'button';
-    editBtn.textContent = '✎';
-    editBtn.style.cssText = 'border:1px solid #6366f1;background:transparent;color:#6366f1;border-radius:6px;padding:2px 8px;font-size:13px;cursor:pointer;font-weight:700';
+    editBtn.textContent = '✎ Редакция';
     editBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleHideMode(); };
     /* PICKER_UX_v2 — ✎ слиза долу, × горе вместо него */
-    editBtn.style.cssText = 'position:absolute;bottom:6px;right:8px;border:1px solid #6366f1;background:transparent;color:#6366f1;border-radius:6px;padding:2px 8px;font-size:13px;cursor:pointer;font-weight:700;z-index:6';
+    editBtn.style.cssText = 'position:absolute;bottom:6px;right:8px;border:1px solid #6366f1;background:rgba(99,102,241,.08);color:#6366f1;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:800;z-index:6;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
     const confirmBtn = document.createElement('button');
     confirmBtn.id = 's9HideConfirm';
     confirmBtn.type = 'button';
@@ -2306,6 +2305,9 @@ function showVariantPicker(variants){
     pk.style.paddingBottom = '34px';
     pk.appendChild(editBtn);
   }
+  /* В режим редакция малкото ✎ е излишно — изходът е големия бутон „Готово" */
+  const _editToggleEl = document.getElementById('s9EditToggle');
+  if(_editToggleEl) _editToggleEl.style.display = _hideModeActive ? 'none' : 'block';
   list.innerHTML = '';
   variants.forEach((v, idx) => {
     /* РЕДАКЦИЯ (✎ режим): бутон „Марка" (отваря избор-екран) + цена + Скрий */
@@ -2398,6 +2400,15 @@ function showVariantPicker(variants){
     btn.addEventListener('pointercancel', () => { _startX = _startY = null; });
     /* VARIANT_HIDE_v1 — wrap е добавен горе */
   });
+  /* RENAME_BRAND_v2 — ясен изход от режим редакция */
+  if(_hideModeActive){
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.textContent = '✓ Готово — избери продукт';
+    done.style.cssText = 'width:100%;margin-top:10px;padding:14px;border:none;border-radius:10px;background:linear-gradient(135deg,#6366f1,#16a34a);color:#fff;font:900 14px system-ui;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;box-shadow:0 4px 14px rgba(34,197,94,.35)';
+    done.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleHideMode(); };
+    list.appendChild(done);
+  }
   pk.style.display = 'block';
 }
 
