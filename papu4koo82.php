@@ -29,6 +29,11 @@ function tableExists(PDO $pdo, string $table): bool {
 
 $ajax = $_GET['ajax'] ?? '';
 
+/* Без кеширане — иначе браузърът показва стар (логнат) HTML панел, докато
+   сесията на сървъра вече е изтекла → AJAX заявките връщат 401 → празно. */
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+
 /* ============================================================
    AUTH GUARD — session login (GDPR security fix)
    ============================================================ */
@@ -78,11 +83,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_login'])) {
     }
 }
 
-// Session hijack guard: IP + UA binding
+// Session hijack guard: само UA binding.
+// IP binding-ът е премахнат — на мобилни мрежи (CGNAT) различните връзки на
+// един и същи телефон излизат с различни публични IP-та. Това триеше сесията
+// между зареждането на страницата и AJAX заявките → всеки AJAX връщаше 401 →
+// таблото/статистиките оставаха вечно на "Зареждане..." (празен панел).
 if (!empty($_SESSION['admin_authed'])) {
-    $curIp = $_SERVER['REMOTE_ADDR'] ?? '';
     $curUa = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200);
-    if (($_SESSION['admin_ip'] ?? '') !== $curIp || ($_SESSION['admin_ua'] ?? '') !== $curUa) {
+    if (($_SESSION['admin_ua'] ?? '') !== $curUa) {
         $_SESSION = [];
         session_destroy();
         session_start();
@@ -1376,6 +1384,16 @@ let dhLoading = false;
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 function euroFmt(n){ return parseFloat(n||0).toFixed(2)+' €' }
+
+/* При изтекла сесия (AJAX → 401) — видим банер вместо тих провал/вечно "Зареждане...". */
+function showAuthExpired(){
+  if(document.getElementById('authExpiredBar')) return;
+  const bar=document.createElement('div');
+  bar.id='authExpiredBar';
+  bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#D32B2B;color:#fff;padding:12px 16px;font:700 14px/1.3 Arial,sans-serif;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  bar.innerHTML='Сесията изтече или не си логнат. <a href="'+BASE+'" style="color:#fff;text-decoration:underline;font-weight:900">Влез отново</a>';
+  document.body.appendChild(bar);
+}
 function fmtDate(s){ if(!s)return'—'; const d=new Date(s); return d.toLocaleDateString('bg-BG')+' '+d.toLocaleTimeString('bg-BG',{hour:'2-digit',minute:'2-digit'}) }
 function fmtTime(s){ if(!s)return'—'; return String(s).slice(11,16) }
 
@@ -1448,8 +1466,18 @@ async function loadDashboard(){
   const from=document.getElementById('dashFrom')?.value||'';
   const to=document.getElementById('dashTo')?.value||'';
   const res=await fetch(`${BASE}?ajax=dashboard&loc=${dashLocId}&from=${from}&to=${to}`);
+  if(res.status===401){
+    showAuthExpired();
+    document.getElementById('dashStats').innerHTML='<div class="empty" style="padding:20px">Сесията изтече — влез отново.</div>';
+    const _bl=document.getElementById('dashByLoc'); if(_bl) _bl.innerHTML='<div class="empty">—</div>';
+    return;
+  }
   const data=await res.json();
-  if(!data.ok)return;
+  if(!data.ok){
+    document.getElementById('dashStats').innerHTML='<div class="empty" style="padding:20px">Грешка: '+esc(data.error||'неизвестна')+'</div>';
+    const _bl=document.getElementById('dashByLoc'); if(_bl) _bl.innerHTML='<div class="empty">—</div>';
+    return;
+  }
   const s=data.sales;
   document.getElementById('dashStats').innerHTML=`
     <div class="stat-card yellow"><div class="stat-label">Оборот</div><div class="stat-value">${euroFmt(s.total)}</div><div class="stat-sub">За избрания период</div></div>
@@ -1863,6 +1891,11 @@ async function loadStats(){
   const label = document.getElementById('statPeriodLabel');
   if(label) label.textContent = 'Зареждане...';
   const res = await fetch(`${BASE}?ajax=stats_all&period=${statsPeriod}&loc=${dashLocId}`);
+  if(res.status===401){
+    showAuthExpired();
+    document.getElementById('statsMoney').innerHTML = '<div class="empty">Сесията изтече — влез отново.</div>';
+    return;
+  }
   const d = await res.json();
   if(!d.ok){
     document.getElementById('statsMoney').innerHTML = `<div class="empty">Грешка: ${esc(d.error||'')}</div>`;
