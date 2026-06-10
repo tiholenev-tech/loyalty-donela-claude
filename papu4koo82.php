@@ -739,6 +739,18 @@ if ($ajax === 'stats_all') {
             GROUP BY location_id, location_name ORDER BY total DESC");
         $s->execute($P); $byLoc = $s->fetchAll(PDO::FETCH_ASSOC);
 
+        /* Регистрации по магазин (класация) — по обекта, в който е направена картата */
+        $regByLoc = [];
+        try {
+            $rs = $pdo->prepare("SELECT COALESCE(NULLIF(reg_location_name,''),'— без магазин —') loc, COUNT(*) cnt
+                FROM customers
+                WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to
+                GROUP BY reg_location_id, reg_location_name
+                ORDER BY cnt DESC");
+            $rs->execute(['from'=>$dateFrom,'to'=>$dateTo]);
+            $regByLoc = $rs->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $regByLoc = []; }
+
         /* КЛИЕНТИ */
         $s = $pdo->prepare("SELECT COUNT(*) FROM customers WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to");
         $s->execute(['from'=>$dateFrom,'to'=>$dateTo]); $newCust = (int)$s->fetchColumn();
@@ -814,6 +826,7 @@ if ($ajax === 'stats_all') {
             'by_hour'     => $byHour,
             'by_day'      => $byDay,
             'by_loc'      => $byLoc,
+            'reg_by_loc'  => $regByLoc,
             'customers'   => [
                 'new'            => $newCust,
                 'dormant_30'     => $dormant,
@@ -1371,6 +1384,10 @@ textarea.form-input{resize:vertical;min-height:80px}
   <!-- Обекти -->
   <div class="card-title" style="margin:20px 0 10px">📍 По обекти</div>
   <div class="card" id="statsLocCard"></div>
+
+  <!-- Класация: регистрации по магазин -->
+  <div class="card-title" style="margin:20px 0 10px">🏪 Регистрации по магазин</div>
+  <div class="card" id="statsRegByLoc"></div>
 
   <!-- Top списъци -->
   <div class="card-title" style="margin:20px 0 10px">🏆 Топ 10 клиенти</div>
@@ -2173,6 +2190,20 @@ async function loadStats(){
   if(locRows.length === 0) locHtml += '<tr><td colspan="6" class="empty">Няма данни</td></tr>';
   locHtml += '</tbody></table></div>';
   document.getElementById('statsLocCard').innerHTML = locHtml;
+
+  /* Класация: регистрации по магазин */
+  const regRows = d.reg_by_loc || [];
+  const regTotal = regRows.reduce((a,b)=>a+Number(b.cnt),0);
+  let regHtml = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Магазин</th><th>Регистрации</th><th>% от общото</th></tr></thead><tbody>';
+  regRows.forEach((r,i)=>{
+    const pct = regTotal>0 ? ((Number(r.cnt)/regTotal)*100).toFixed(1) : '0.0';
+    const medal = i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':'';
+    regHtml += `<tr><td><span class="badge badge-gray">#${i+1}</span></td><td><strong>${medal}${esc(r.loc)}</strong></td><td style="font-weight:800">${r.cnt}</td><td>${pct}%</td></tr>`;
+  });
+  if(regRows.length===0) regHtml += '<tr><td colspan="4" class="empty">Няма регистрации за периода</td></tr>';
+  regHtml += '</tbody></table></div>';
+  const _regEl = document.getElementById('statsRegByLoc');
+  if(_regEl) _regEl.innerHTML = regHtml;
 
   /* Top 10 by spend */
   const tSpend = d.top_spend || [];

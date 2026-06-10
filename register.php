@@ -3,6 +3,10 @@ require "config.php";
 $incomingRef = trim($_GET["ref"] ?? "");
 $source      = trim($_GET["source"] ?? "");
 
+/* Обекти за селектора „в кой магазин е направена картата" */
+$regLocations = [];
+try { $regLocations = $pdo->query("SELECT id, name FROM locations ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
+
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $first_name  = trim($_POST["first_name"]  ?? "");
     $last_name   = trim($_POST["last_name"]   ?? "");
@@ -10,6 +14,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $birth_day   = trim($_POST["birth_day"]   ?? "");
     $birth_month = trim($_POST["birth_month"] ?? "");
     $birth_year  = trim($_POST["birth_year"]  ?? "");
+    $reg_location_id = (int)($_POST["reg_location"] ?? 0);
 
     if (
         !preg_match('/^\d{1,2}$/', $birth_day) ||
@@ -21,7 +26,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $errorDate = false;
     }
 
-    if (!$errorDate) {
+    $errorLoc = $reg_location_id <= 0;
+
+    if (!$errorDate && !$errorLoc) {
         $birth_date = $birth_year . "-" . str_pad($birth_month,2,'0',STR_PAD_LEFT) . "-" . str_pad($birth_day,2,'0',STR_PAD_LEFT);
         $ref_code   = strtoupper(substr(md5(uniqid((string)mt_rand(), true)), 0, 8));
 
@@ -42,19 +49,22 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 }
             }
 
-            if ($hasRefCode) {
-                $stmt = $pdo->prepare("
-                    INSERT INTO customers (first_name, last_name, phone, birth_date, ref_code, referred_by)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([$first_name, $last_name, $phone, $birth_date, $ref_code, $referred_by]);
-            } else {
-                $stmt = $pdo->prepare("
-                    INSERT INTO customers (first_name, last_name, phone, birth_date)
-                    VALUES (?, ?, ?, ?)
-                ");
-                $stmt->execute([$first_name, $last_name, $phone, $birth_date]);
+            /* Име на обекта, в който се прави картата */
+            $reg_location_name = null;
+            if ($reg_location_id > 0) {
+                $ls = $pdo->prepare("SELECT name FROM locations WHERE id = ? LIMIT 1");
+                $ls->execute([$reg_location_id]);
+                $reg_location_name = (string)($ls->fetchColumn() ?: '');
             }
+            $hasRegLoc = false;
+            try { $pdo->query("SELECT reg_location_id FROM customers LIMIT 0"); $hasRegLoc = true; } catch (Throwable $e) {}
+
+            $cols = ['first_name','last_name','phone','birth_date'];
+            $vals = [$first_name, $last_name, $phone, $birth_date];
+            if ($hasRefCode) { $cols[]='ref_code'; $vals[]=$ref_code; $cols[]='referred_by'; $vals[]=$referred_by; }
+            if ($hasRegLoc)  { $cols[]='reg_location_id'; $vals[]=($reg_location_id ?: null); $cols[]='reg_location_name'; $vals[]=$reg_location_name; }
+            $ph  = implode(',', array_fill(0, count($cols), '?'));
+            $pdo->prepare("INSERT INTO customers (".implode(',', $cols).") VALUES ($ph)")->execute($vals);
 
             $customer_id = (int)$pdo->lastInsertId();
 
@@ -258,6 +268,20 @@ body::before{
 }
 .field input::placeholder{ color:var(--text-muted); font-weight:500; }
 
+.field select{
+  width:100%; padding:14px 16px; font-size:15px; font-weight:600; font-family:inherit;
+  border:1px solid rgba(15,23,42,.08);
+  border-radius:14px; background:rgba(255,255,255,.7);
+  color:var(--text-primary); appearance:none; -webkit-appearance:none; cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath fill='%2394a3b8' d='M6 7L0 0h12z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 16px center;
+  transition:border-color .2s, box-shadow .2s;
+}
+.field select:focus{
+  outline:none; border-color:hsl(var(--hue1) 60% 60%); background-color:#fff;
+  box-shadow:0 0 0 3px hsl(var(--hue1) 70% 85% / .5);
+}
+
 .birth-row{ display:flex; gap:8px; align-items:center; }
 .birth-row input{ text-align:center; font-variant-numeric:tabular-nums; font-weight:700; }
 .birth-day,.birth-month{ flex:0 0 70px; }
@@ -388,6 +412,24 @@ body::before{
       </div>
     </div>
 
+  <?php elseif (!empty($errorLoc)): ?>
+    <!-- ══ ERROR: липсва магазин ══ -->
+    <div class="glass q1 result-card">
+      <span class="shine"></span><span class="shine shine-bottom"></span>
+      <span class="glow"></span><span class="glow glow-bottom"></span>
+      <div class="result-icon-wrap error">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <div class="result-title">Избери магазин</div>
+      <div class="result-sub">Трябва да посочиш <strong>в кой магазин</strong> се прави картата.</div>
+      <div>
+        <a class="result-btn" href="register.php<?= $source ? '?source='.urlencode($source) : '' ?><?= ($source && $incomingRef) ? '&ref='.urlencode($incomingRef) : ($incomingRef ? '?ref='.urlencode($incomingRef) : '') ?>">
+          <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+          <span>Опитай отново</span>
+        </a>
+      </div>
+    </div>
+
   <?php elseif (!empty($errorGeneric)): ?>
     <!-- ══ ERROR: generic ══ -->
     <div class="glass q1 result-card">
@@ -457,6 +499,16 @@ body::before{
             <span class="birth-sep">/</span>
             <input class="birth-year" type="text" name="birth_year" placeholder="ГГГГ" maxlength="4" inputmode="numeric" required>
           </div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="regLoc">Магазин — къде се прави картата</label>
+          <select id="regLoc" name="reg_location" required>
+            <option value="" disabled <?= empty($_POST['reg_location']) ? 'selected' : '' ?>>— избери магазин —</option>
+            <?php foreach ($regLocations as $loc): ?>
+              <option value="<?= (int)$loc['id'] ?>" <?= ((int)($_POST['reg_location'] ?? 0) === (int)$loc['id']) ? 'selected' : '' ?>><?= h($loc['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
         </div>
 
         <button type="submit" class="submit-btn" id="submitBtn">
