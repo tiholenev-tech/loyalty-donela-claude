@@ -547,6 +547,16 @@ if ($ajax === 'update_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* ── Текущ бизнес ден за JS ── */
 $currentBizDate = businessDate();
+
+/* ── Марки/производители (динамичен списък) ──
+   Зарежда се от таблица brands; fallback към твърдия списък ако таблицата я няма. */
+$brandOptions = [];
+try {
+    $brandOptions = $pdo->query("SELECT name FROM brands ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Throwable $e) { $brandOptions = []; }
+if (!$brandOptions) {
+    $brandOptions = ['Статера','Лорд','Спико','Дафи','Ареал','DX','Ивон','Иватакс','Петков','Роял Тайгър','Китайско','Чорапи','Чорапогащи'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="bg">
@@ -1747,12 +1757,9 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
         <div class="f-label">Производител</div>
         <select id="brandSelect" class="f-select">
           <option value="">— без —</option>
-          <option>Статера</option><option>Лорд</option><option>Спико</option>
-          <option>Дафи</option><option>Ареал</option><option>DX</option>
-          <option>Ивон</option><option>Иватакс</option><option>Петков</option>
-          <option>Роял Тайгър</option><option>Китайско</option>
-          <option>Чорапи</option><option>Чорапогащи</option><!-- ADD_BRANDS_CHORAPI_v1 -->
+          <?php foreach ($brandOptions as $b): ?><option><?= h($b) ?></option><?php endforeach; ?>
         </select>
+        <datalist id="brandsDatalist"><?php foreach ($brandOptions as $b): ?><option value="<?= h($b) ?>"></option><?php endforeach; ?></datalist>
       </div>
       <div>
         <div class="f-label">Цена (€)</div>
@@ -1910,6 +1917,7 @@ const LOCATION_ID   = <?= (int)$locationId ?>;
 const LOCATION_NAME = <?= json_encode($locationName, JSON_UNESCAPED_UNICODE) ?>;
 const PAGE_URL      = window.location.href;
 const BIZ_DATE      = <?= json_encode($currentBizDate) ?>;
+const BRANDS        = <?= json_encode(array_values($brandOptions), JSON_UNESCAPED_UNICODE) ?>;
 
 /* S79.UNIFIED globals — ПРЕДИ всичко за избягване на TDZ */
 let scannedCard = '';
@@ -2115,6 +2123,67 @@ async function confirmBatchHide(){
     }, 300);
   }
 }
+/* RENAME_BRAND_v1 — преименуване/задаване на марка на вариант + добавяне в списъка с производители */
+function addBrandToList(name){
+  name = String(name||'').trim();
+  if(!name) return;
+  if(typeof BRANDS !== 'undefined' && BRANDS.indexOf(name) === -1) BRANDS.push(name);
+  if(brandSelect){
+    let exists = false;
+    for(let i=0;i<brandSelect.options.length;i++){
+      if(brandSelect.options[i].value===name || brandSelect.options[i].text===name){ exists = true; break; }
+    }
+    if(!exists){ const o = document.createElement('option'); o.textContent = name; brandSelect.appendChild(o); }
+  }
+  const dl = document.getElementById('brandsDatalist');
+  if(dl){
+    let ex = false;
+    for(const o of dl.options){ if(o.value===name){ ex = true; break; } }
+    if(!ex){ const op = document.createElement('option'); op.value = name; dl.appendChild(op); }
+  }
+}
+function relookupCurrent(){
+  const codeNow = codeInput.value.trim();
+  if(codeNow && codeNow.length >= 1){
+    setTimeout(() => {
+      fetch('lookup_code.php?code=' + encodeURIComponent(codeNow))
+        .then(r => r.json())
+        .then(d => { if(d.ok && d.variants && d.variants.length) showVariantPicker(d.variants); else hideVariantPicker(); })
+        .catch(()=>{});
+    }, 250);
+  }
+}
+async function renameVariant(code, oldBrand, price, newBrandRaw){
+  const newBrand = String(newBrandRaw||'').trim().replace(/\s+/g,' ');
+  if(newBrand === String(oldBrand||'')){ s9dbg('без промяна', 'rgba(120,120,120,.85)'); return; }
+  try {
+    const res = await fetch('rename_variant.php', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({code, brand: oldBrand, price, new_brand: newBrand})
+    });
+    const d = await res.json();
+    if(d.ok){
+      s9dbg('Запазено: ' + (newBrand || '(без марка)'), 'rgba(0,150,50,.85)');
+      if(newBrand) addBrandToList(newBrand);
+      relookupCurrent();
+    } else {
+      s9dbg('Грешка: ' + (d.error || '?'), 'rgba(200,0,0,.85)');
+    }
+  } catch(e){ s9dbg('ERR ' + (e.message||e), 'rgba(200,0,0,.85)'); }
+}
+async function hideVariantNow(code, brand, price){
+  if(!confirm('Скрий този вариант от предложенията?')) return;
+  try {
+    const res = await fetch('hide_variant.php', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({code, brand, price})
+    });
+    const d = await res.json();
+    if(d.ok && d.hidden > 0){ s9dbg('скрит', 'rgba(0,150,50,.85)'); relookupCurrent(); }
+    else s9dbg('не е скрит', 'rgba(150,100,0,.85)');
+  } catch(e){ s9dbg('ERR ' + (e.message||e), 'rgba(200,0,0,.85)'); }
+}
+
 function showVariantPicker(variants){
   /* VARIANT_HIDE_v1 + PICKER_UX_v2 scroll-into-view */
   const pk = document.getElementById('s9VariantPicker');
@@ -2176,6 +2245,30 @@ function showVariantPicker(variants){
   }
   list.innerHTML = '';
   variants.forEach((v, idx) => {
+    /* РЕДАКЦИЯ (✎ режим): ред с поле за марка/производител + Запази + Скрий */
+    if(_hideModeActive){
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;margin-bottom:6px';
+      const inp = document.createElement('input');
+      inp.type = 'text'; inp.setAttribute('list','brandsDatalist');
+      inp.value = v.brand || ''; inp.placeholder = 'марка / производител';
+      inp.autocapitalize = 'words'; inp.autocomplete = 'off';
+      inp.style.cssText = 'flex:1;min-width:0;padding:9px 10px;border:1.5px solid #6366f1;border-radius:8px;font:600 13px system-ui;color:#1e293b;background:#fff';
+      const pr = document.createElement('span');
+      pr.style.cssText = 'font:900 12px monospace;color:#94a3b8;white-space:nowrap';
+      pr.textContent = v.price.toFixed(2) + ' € ×' + v.use_count;
+      const saveB = document.createElement('button');
+      saveB.type = 'button'; saveB.textContent = 'Запази';
+      saveB.style.cssText = 'padding:9px 10px;border:none;border-radius:8px;background:#16a34a;color:#fff;font:900 11px system-ui;cursor:pointer;white-space:nowrap;touch-action:manipulation';
+      saveB.onclick = (e) => { e.preventDefault(); e.stopPropagation(); renameVariant(codeInput.value.trim(), v.brand || '', v.price, inp.value); };
+      const delB = document.createElement('button');
+      delB.type = 'button'; delB.textContent = 'Скрий';
+      delB.style.cssText = 'padding:9px 10px;border:1px solid #dc2626;border-radius:8px;background:#fff;color:#dc2626;font:900 11px system-ui;cursor:pointer;white-space:nowrap;touch-action:manipulation';
+      delB.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hideVariantNow(codeInput.value.trim(), v.brand || '', v.price); };
+      row.appendChild(inp); row.appendChild(pr); row.appendChild(saveB); row.appendChild(delB);
+      list.appendChild(row);
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:relative;display:inline-flex';
     const btn = document.createElement('button');
