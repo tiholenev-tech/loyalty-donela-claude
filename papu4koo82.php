@@ -1451,6 +1451,21 @@ textarea.form-input{resize:vertical;min-height:80px}
   <div class="card-title" style="margin-bottom:10px">💰 Пари</div>
   <div class="stats-grid" id="statsMoney"><div class="loading">Зареждане...</div></div>
 
+  <!-- Приблизителна печалба (на база средна наценка) -->
+  <div class="card" id="statsProfitCard" style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:16px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-weight:700;color:var(--text2);font-size:13px">Средна наценка:</span>
+      <input id="statsMarkup" type="number" inputmode="decimal" step="0.5" min="0" value="53.5"
+             style="width:84px;padding:9px;border:1px solid var(--border);border-radius:8px;font-weight:800;text-align:center;font-family:inherit;font-size:15px">
+      <span style="font-weight:800;font-size:15px">%</span>
+    </div>
+    <div style="flex:1;min-width:170px">
+      <div style="font-size:11px;color:var(--text2);font-weight:800;text-transform:uppercase;letter-spacing:.3px">💰 Приблизителна печалба</div>
+      <div id="statsProfitVal" style="font-size:26px;font-weight:900;color:var(--green);line-height:1.1">— €</div>
+      <div id="statsProfitSub" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
+    </div>
+  </div>
+
   <!-- Ръст спрямо минал период -->
   <div class="card-title" style="margin:20px 0 10px">📈 Ръст спрямо предходния период</div>
   <div class="stats-grid" id="statsGrowth"></div>
@@ -2182,6 +2197,24 @@ async function deletePurchase(id){
 
 /* ═══════════ СТАТИСТИКИ ═══════════ */
 let statsPeriod = '30';
+let _lastStats = null;
+function recalcProfit(){
+  if(!_lastStats) return;
+  const mInp = document.getElementById('statsMarkup');
+  let m = parseFloat(mInp ? mInp.value : NaN);
+  if(isNaN(m) || m < 0) m = 53.5;
+  try { localStorage.setItem('stats_markup', String(m)); } catch(e){}
+  const net   = Number((_lastStats.core && _lastStats.core.total) || 0);
+  const gross = Number(_lastStats.gross || 0);
+  const cost  = gross / (1 + m/100);
+  const profit = net - cost;
+  const margin = net > 0 ? (profit / net * 100) : 0;
+  const pv = document.getElementById('statsProfitVal');
+  const psub = document.getElementById('statsProfitSub');
+  if(pv){ pv.textContent = euroFmt(profit); pv.style.color = profit >= 0 ? 'var(--green)' : 'var(--red)'; }
+  if(psub) psub.textContent = 'Марж ' + margin.toFixed(1) + '% от оборота · себестойност ~' + euroFmt(cost);
+}
+window.recalcProfit = recalcProfit;
 let statsDayChart = null, statsDowChart = null, statsHourChart = null;
 
 document.querySelectorAll('.stat-period').forEach(btn => {
@@ -2208,6 +2241,16 @@ async function loadStats(){
     return;
   }
   if(label) label.textContent = `${d.date_from.slice(0,10)} → ${d.date_to.slice(0,10)} · ${d.days} дни`;
+
+  /* Приблизителна печалба — запомни данните + init на наценката */
+  _lastStats = d;
+  const _mInp = document.getElementById('statsMarkup');
+  if(_mInp){
+    const _saved = localStorage.getItem('stats_markup');
+    if(_saved) _mInp.value = _saved;
+    _mInp.oninput = recalcProfit;
+  }
+  recalcProfit();
 
   const c = d.core;
   const cu = d.customers;
