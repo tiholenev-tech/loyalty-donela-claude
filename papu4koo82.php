@@ -847,6 +847,152 @@ if ($ajax === 'stats_all') {
     }
 }
 
+/* ════════════════════════════════════════════════════════════════
+   СКЛАДОВО САЛДО (inventory_balance) — по обект, по месец
+   Крайно салдо (в продажни цени) =
+     начално (авто = крайно от мин. месец, или ръчно за първия)
+     + получена стока + увеличение на цени + трансфер вход
+     − реален оборот − отстъпки − намаление на цени − трансфер изход
+   Реален оборот и отстъпки идват автоматично от purchase_scans.
+   ════════════════════════════════════════════════════════════════ */
+function invManualRow(PDO $pdo, int $locId, string $period): ?array {
+    $s = $pdo->prepare("SELECT * FROM inventory_balance WHERE location_id=:l AND period=:p LIMIT 1");
+    $s->execute(['l'=>$locId, 'p'=>$period]);
+    return $s->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+function invAutoSales(PDO $pdo, int $locId, string $period): array {
+    $start = $period . '-01 00:00:00';
+    $end   = date('Y-m-t 23:59:59', strtotime($period . '-01'));
+    $cond  = $locId > 0 ? 'AND location_id = :l' : '';
+    $p = ['s'=>$start, 'e'=>$end];
+    if ($locId > 0) $p['l'] = $locId;
+    $s = $pdo->prepare("SELECT COALESCE(SUM(amount),0) net, COALESCE(SUM(discount_amount),0) disc, COUNT(*) cnt
+        FROM purchase_scans WHERE deleted_at IS NULL AND created_at BETWEEN :s AND :e $cond");
+    $s->execute($p);
+    $r = $s->fetch(PDO::FETCH_ASSOC);
+    return ['net'=>(float)$r['net'], 'disc'=>(float)$r['disc'], 'cnt'=>(int)$r['cnt']];
+}
+function invOpening(PDO $pdo, int $locId, string $period, int $depth = 0): float {
+    static $memo = [];
+    $key = $locId.'|'.$period;
+    if (isset($memo[$key])) return $memo[$key];
+    if ($depth > 60) return 0.0;
+    $row = invManualRow($pdo, $locId, $period);
+    if ($row && (int)$row['opening_manual'] === 1) return $memo[$key] = (float)$row['opening_balance'];
+    /* авто-пренос: началото = крайното на предходния месец */
+    $prev = date('Y-m', strtotime($period . '-01 -1 month'));
+    return $memo[$key] = invClosing($pdo, $locId, $prev, $depth + 1);
+}
+function invClosing(PDO $pdo, int $locId, string $period, int $depth = 0): float {
+    static $memo = [];
+    $key = $locId.'|'.$period;
+    if (isset($memo[$key])) return $memo[$key];
+    $row   = invManualRow($pdo, $locId, $period);
+    $sales = invAutoSales($pdo, $locId, $period);
+    $opening  = invOpening($pdo, $locId, $period, $depth);
+    /* празен месец (без ред и без продажби) надолу по веригата → нищо не се променя */
+    if (!$row && $sales['cnt'] === 0 && $depth > 0) return $memo[$key] = $opening;
+    $received = (float)($row['goods_received'] ?? 0);
+    $markup   = (float)($row['markup_total']   ?? 0);
+    $markdown = (float)($row['markdown_total'] ?? 0);
+    $tin      = (float)($row['transfer_in']    ?? 0);
+    $tout     = (float)($row['transfer_out']   ?? 0);
+    return $memo[$key] = round($opening + $received + $markup + $tin
+                               - $sales['net'] - $sales['disc'] - $markdown - $tout, 2);
+}
+
+if ($ajax === 'inv_get') {
+    $locId  = (int)($_GET['loc'] ?? 0);
+    $period = preg_match('/^\d{4}-\d{2}$/', (string)($_GET['period'] ?? '')) ? $_GET['period'] : date('Y-m');
+    try {
+        if (!tableExists($pdo, 'inventory_balance')) {
+            jsonOut(['ok'=>false, 'error'=>'Таблицата inventory_balance липсва — пусни migrations/S_inventory_balance.sql']);
+        }
+        $prevPeriod = date('Y-m', strtotime($period.'-01 -1 month'));
+
+        if ($locId === 0) {
+            /* Всички обекти → сбор на салдата по обект (само за четене) */
+            $locIds = $pdo->query("SELECT id FROM locations")->fetchAll(PDO::FETCH_COLUMN);
+            $sales = invAutoSales($pdo, 0, $period);
+            $opening = 0.0; $closing = 0.0;
+            $agg = ['goods_received'=>0,'markup_total'=>0,'markdown_total'=>0,'transfer_in'=>0,'transfer_out'=>0];
+            foreach ($locIds as $lid) {
+                $lid = (int)$lid;
+                $opening += invOpening($pdo, $lid, $period);
+                $closing += invClosing($pdo, $lid, $period);
+                $r = invManualRow($pdo, $lid, $period);
+                if ($r) foreach ($agg as $k=>$_) $agg[$k] += (float)($r[$k] ?? 0);
+            }
+            jsonOut([
+                'ok'=>true, 'loc'=>0, 'period'=>$period, 'aggregate'=>true,
+                'net'=>round($sales['net'],2), 'disc'=>round($sales['disc'],2),
+                'gross'=>round($sales['net']+$sales['disc'],2), 'cnt'=>$sales['cnt'],
+                'opening'=>round($opening,2),
+                'manual'=>array_map(fn($v)=>round($v,2), $agg) + ['note'=>'', 'opening_manual'=>0, 'opening_balance'=>round($opening,2)],
+                'closing'=>round($closing,2), 'saved'=>true, 'prev_has_data'=>true,
+            ]);
+        }
+
+        $row   = invManualRow($pdo, $locId, $period);
+        $sales = invAutoSales($pdo, $locId, $period);
+        $opening = invOpening($pdo, $locId, $period);
+        $prevRow = invManualRow($pdo, $locId, $prevPeriod);
+        $prevHasData = $prevRow || invAutoSales($pdo, $locId, $prevPeriod)['cnt'] > 0;
+        $openingManual = $row !== null ? (int)$row['opening_manual'] : ($prevHasData ? 0 : 1);
+        $manual = [
+            'goods_received' => (float)($row['goods_received'] ?? 0),
+            'markup_total'   => (float)($row['markup_total']   ?? 0),
+            'markdown_total' => (float)($row['markdown_total'] ?? 0),
+            'transfer_in'    => (float)($row['transfer_in']    ?? 0),
+            'transfer_out'   => (float)($row['transfer_out']   ?? 0),
+            'note'           => (string)($row['note'] ?? ''),
+            'opening_manual' => $openingManual,
+            'opening_balance'=> round($opening, 2),
+        ];
+        $closing = round($opening + $manual['goods_received'] + $manual['markup_total'] + $manual['transfer_in']
+                         - $sales['net'] - $sales['disc'] - $manual['markdown_total'] - $manual['transfer_out'], 2);
+        jsonOut([
+            'ok'=>true, 'loc'=>$locId, 'period'=>$period, 'aggregate'=>false,
+            'net'=>round($sales['net'],2), 'disc'=>round($sales['disc'],2),
+            'gross'=>round($sales['net']+$sales['disc'],2), 'cnt'=>$sales['cnt'],
+            'opening'=>round($opening,2), 'opening_carried'=>($openingManual===0),
+            'manual'=>$manual, 'closing'=>$closing, 'saved'=>($row !== null),
+            'prev_has_data'=>$prevHasData,
+        ]);
+    } catch (Throwable $e) { jsonOut(['ok'=>false, 'error'=>$e->getMessage()]); }
+}
+
+if ($ajax === 'inv_save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $d = json_decode(file_get_contents('php://input'), true) ?? [];
+    $locId  = (int)($d['loc'] ?? 0);
+    $period = preg_match('/^\d{4}-\d{2}$/', (string)($d['period'] ?? '')) ? $d['period'] : '';
+    if ($locId <= 0)  jsonOut(['ok'=>false, 'error'=>'Избери конкретен обект (не „Всички").']);
+    if (!$period)     jsonOut(['ok'=>false, 'error'=>'Невалиден месец.']);
+    $num = fn($k) => round((float)($d[$k] ?? 0), 2);
+    $openingManual  = !empty($d['opening_manual']) ? 1 : 0;
+    $openingBalance = round((float)($d['opening_balance'] ?? 0), 2);
+    try {
+        if (!tableExists($pdo, 'inventory_balance')) {
+            jsonOut(['ok'=>false, 'error'=>'Таблицата inventory_balance липсва — пусни migrations/S_inventory_balance.sql']);
+        }
+        $pdo->prepare("INSERT INTO inventory_balance
+            (location_id, period, opening_balance, opening_manual, goods_received, markup_total, markdown_total, transfer_in, transfer_out, note, updated_at)
+            VALUES (:l,:p,:ob,:om,:gr,:mu,:md,:ti,:to,:n,NOW())
+            ON DUPLICATE KEY UPDATE
+              opening_balance=VALUES(opening_balance), opening_manual=VALUES(opening_manual),
+              goods_received=VALUES(goods_received), markup_total=VALUES(markup_total),
+              markdown_total=VALUES(markdown_total), transfer_in=VALUES(transfer_in),
+              transfer_out=VALUES(transfer_out), note=VALUES(note), updated_at=NOW()")
+            ->execute([
+                'l'=>$locId, 'p'=>$period, 'ob'=>$openingBalance, 'om'=>$openingManual,
+                'gr'=>$num('goods_received'), 'mu'=>$num('markup_total'), 'md'=>$num('markdown_total'),
+                'ti'=>$num('transfer_in'), 'to'=>$num('transfer_out'),
+                'n'=>mb_substr(trim((string)($d['note'] ?? '')), 0, 255),
+            ]);
+        jsonOut(['ok'=>true]);
+    } catch (Throwable $e) { jsonOut(['ok'=>false, 'error'=>$e->getMessage()]); }
+}
+
 /* ── Банери ── */
 if ($ajax==='banners_list'){try{$rows=$pdo->query("SELECT * FROM banners ORDER BY sort_order ASC,id DESC")->fetchAll(PDO::FETCH_ASSOC);jsonOut(['ok'=>true,'rows'=>$rows]);}catch(Throwable $e){jsonOut(['ok'=>false,'error'=>$e->getMessage()]);}}
 if ($ajax==='banner_save'&&$_SERVER['REQUEST_METHOD']==='POST'){$d=json_decode(file_get_contents('php://input'),true)??[];$id=(int)($d['id']??0);$now=date('Y-m-d H:i:s');try{if($id>0){$pdo->prepare("UPDATE banners SET title=:t,body=:b,image_url=:i,link_url=:l,bg_color=:bg,active=:a,sort_order=:s WHERE id=:id")->execute(['t'=>$d['title'],'b'=>$d['body']??'','i'=>$d['image_url']??'','l'=>$d['link_url']??'','bg'=>$d['bg_color']??'#fff8e1','a'=>(int)($d['active']??1),'s'=>(int)($d['sort_order']??0),'id'=>$id]);}else{$pdo->prepare("INSERT INTO banners (title,body,image_url,link_url,bg_color,active,sort_order,created_at) VALUES (:t,:b,:i,:l,:bg,:a,:s,:now)")->execute(['t'=>$d['title'],'b'=>$d['body']??'','i'=>$d['image_url']??'','l'=>$d['link_url']??'','bg'=>$d['bg_color']??'#fff8e1','a'=>(int)($d['active']??1),'s'=>(int)($d['sort_order']??0),'now'=>$now]);}jsonOut(['ok'=>true]);}catch(Throwable $e){jsonOut(['ok'=>false,'error'=>$e->getMessage()]);}};
@@ -1034,6 +1180,7 @@ textarea.form-input{resize:vertical;min-height:80px}
     <div class="nav-item" data-page="audit"><span class="icon">🔍</span>Одит лог</div>
     <div class="nav-item" data-page="locations"><span class="icon">📍</span>Обекти</div>
     <div class="nav-item" data-page="stats"><span class="icon">📈</span>Статистики</div>
+    <div class="nav-item" data-page="inventory"><span class="icon">📦</span>Салдо</div>
   </nav>
   <div class="sidebar-bottom">
     <a href="?logout=1" class="logout-btn">Изход →</a>
@@ -1242,6 +1389,40 @@ textarea.form-input{resize:vertical;min-height:80px}
   <div class="card" id="statsBiggestCard" style="margin-top:16px;display:none"></div>
 </div>
 
+<!-- ═══ СКЛАДОВО САЛДО ═══ -->
+<div class="page" id="page-inventory">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Складово салдо</div>
+      <div class="page-sub">Стойност на стоката в продажни цени, по обект и месец</div>
+    </div>
+    <div class="filters">
+      <input type="month" class="filter-input" id="invMonth">
+      <button class="btn btn-yellow" onclick="loadInventory()">Зареди</button>
+    </div>
+  </div>
+  <div class="loc-tabs" id="invLocTabs"></div>
+  <div id="invBody"><div class="card"><div class="loading">Зареждане...</div></div></div>
+</div>
+
+<style>
+.inv-card{max-width:540px}
+.inv-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #eee}
+.inv-row > span{font-size:14px;color:#374151;font-weight:600}
+.inv-row small{color:#9ca3af;font-weight:500;font-size:11px}
+.inv-row.plus > span{color:#15803d}
+.inv-row.minus > span{color:#b91c1c}
+.inv-inp{width:130px;text-align:right;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:15px;font-weight:700;font-family:inherit;color:#111}
+.inv-inp[readonly]{background:#f3f4f6;color:#6b7280}
+.inv-note{width:100%;max-width:210px;text-align:left;font-weight:500}
+.inv-anchor{display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin:6px 0 4px;cursor:pointer}
+.inv-closing{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:2px solid #111}
+.inv-closing > span{font-size:15px;font-weight:800;color:#111}
+.inv-closing b{font-size:24px;font-weight:900;color:#15803d}
+.inv-note-agg{background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;font-weight:600}
+.inv-meta{font-size:12px;color:#9ca3af;margin-top:12px}
+</style>
+
 <style>
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
 .stat-box{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
@@ -1413,6 +1594,7 @@ document.querySelectorAll('.nav-item').forEach(el=>{
     if(pg==='locations')  loadLocations();
     if(pg==='dayhistory') loadDayHistory();
     if(pg==='stats')      loadStats();
+    if(pg==='inventory')  loadInventory();
     document.getElementById('sidebar').classList.remove('open');
   });
 });
@@ -2018,6 +2200,104 @@ async function loadStats(){
       </div>`;
   }
 }
+
+/* ═══════════ СКЛАДОВО САЛДО ═══════════ */
+let invLocId = 0;
+function buildInvLocTabs(){
+  const t=document.getElementById('invLocTabs'); if(!t) return;
+  let h='<div class="loc-tab'+(invLocId===0?' active':'')+'" onclick="setInvLoc(0,this)">Всички</div>';
+  (locations||[]).forEach(l=>{ h+='<div class="loc-tab'+(invLocId===l.id?' active':'')+'" onclick="setInvLoc('+l.id+',this)">'+esc(l.name)+'</div>'; });
+  t.innerHTML=h;
+}
+function setInvLoc(id,el){ invLocId=id; document.querySelectorAll('#invLocTabs .loc-tab').forEach(x=>x.classList.remove('active')); if(el) el.classList.add('active'); loadInventory(); }
+window.setInvLoc=setInvLoc;
+
+function invF(id){ const e=document.getElementById(id); return e?(parseFloat(e.value)||0):0; }
+function invRecalc(){
+  const closing = invF('invOpening')+invF('invReceived')+invF('invMarkup')+invF('invTransferIn')
+                - invF('invNet')-invF('invDisc')-invF('invMarkdown')-invF('invTransferOut');
+  const el=document.getElementById('invClosing'); if(el) el.textContent = closing.toFixed(2)+' €';
+}
+function invToggleManual(){
+  const cb=document.getElementById('invOpeningManual'); const op=document.getElementById('invOpening');
+  if(!cb||!op) return;
+  if(cb.checked){ op.removeAttribute('readonly'); try{op.focus();}catch(e){} }
+  else { op.setAttribute('readonly','readonly'); }
+}
+function invShowMsg(t, ok){ const e=document.getElementById('invMsg'); if(!e)return; e.textContent=t; e.style.color=ok?'#15803d':'#b91c1c'; e.style.fontWeight='700'; }
+window.invRecalc=invRecalc; window.invToggleManual=invToggleManual;
+
+async function loadInventory(){
+  const m=document.getElementById('invMonth');
+  if(m && !m.value){ m.value=new Date().toISOString().slice(0,7); }
+  const period = m ? m.value : '';
+  buildInvLocTabs();
+  const body=document.getElementById('invBody');
+  body.innerHTML='<div class="card"><div class="loading">Зареждане...</div></div>';
+  try {
+    const res=await fetch(`${BASE}?ajax=inv_get&loc=${invLocId}&period=${period}`);
+    if(res.status===401){ showAuthExpired(); body.innerHTML='<div class="card"><div class="empty">Сесията изтече — влез отново.</div></div>'; return; }
+    const d=await res.json();
+    if(!d.ok){ body.innerHTML='<div class="card"><div class="empty">Грешка: '+esc(d.error||'')+'</div></div>'; return; }
+    renderInventory(d);
+  } catch(e){ body.innerHTML='<div class="card"><div class="empty">Грешка: '+esc(e.message)+'</div></div>'; }
+}
+window.loadInventory=loadInventory;
+
+function renderInventory(d){
+  const agg=!!d.aggregate;
+  const mn=d.manual;
+  const ro = agg ? 'readonly' : '';
+  const noteV = esc(mn.note||'').replace(/"/g,'&quot;');
+  const body=document.getElementById('invBody');
+  body.innerHTML = `
+   <div class="card inv-card">
+     ${agg?'<div class="inv-note-agg">Сборно за всички обекти (само за четене). За въвеждане избери конкретен обект.</div>':''}
+     <div class="inv-row"><span class="inv-lbl">Начално салдо ${d.opening_carried?'<small>(пренос от мин. месец)</small>':''}</span>
+        <input class="inv-inp" inputmode="decimal" id="invOpening" value="${Number(mn.opening_balance).toFixed(2)}" oninput="invRecalc()" ${(agg||!mn.opening_manual)?'readonly':''}></div>
+     ${agg?'':`<label class="inv-anchor"><input type="checkbox" id="invOpeningManual" ${mn.opening_manual?'checked':''} onchange="invToggleManual()"> Ръчно начално салдо (за първия месец / корекция)</label>`}
+     <div class="inv-row plus"><span>＋ Получена стока</span><input class="inv-inp" inputmode="decimal" id="invReceived" value="${Number(mn.goods_received).toFixed(2)}" ${ro} oninput="invRecalc()"></div>
+     <div class="inv-row plus"><span>＋ Увеличение на цени</span><input class="inv-inp" inputmode="decimal" id="invMarkup" value="${Number(mn.markup_total).toFixed(2)}" ${ro} oninput="invRecalc()"></div>
+     <div class="inv-row plus"><span>＋ Трансфер вход</span><input class="inv-inp" inputmode="decimal" id="invTransferIn" value="${Number(mn.transfer_in).toFixed(2)}" ${ro} oninput="invRecalc()"></div>
+     <div class="inv-row minus"><span>− Реален оборот <small>(авто)</small></span><input class="inv-inp" id="invNet" value="${Number(d.net).toFixed(2)}" readonly></div>
+     <div class="inv-row minus"><span>− Отстъпки <small>(авто)</small></span><input class="inv-inp" id="invDisc" value="${Number(d.disc).toFixed(2)}" readonly></div>
+     <div class="inv-row minus"><span>− Намаление на цени</span><input class="inv-inp" inputmode="decimal" id="invMarkdown" value="${Number(mn.markdown_total).toFixed(2)}" ${ro} oninput="invRecalc()"></div>
+     <div class="inv-row minus"><span>− Трансфер изход</span><input class="inv-inp" inputmode="decimal" id="invTransferOut" value="${Number(mn.transfer_out).toFixed(2)}" ${ro} oninput="invRecalc()"></div>
+     <div class="inv-row"><span>Бележка</span><input class="inv-inp inv-note" type="text" id="invNote" value="${noteV}" ${agg?'readonly':''}></div>
+     <div class="inv-closing"><span>Крайно салдо</span><b id="invClosing">${Number(d.closing).toFixed(2)} €</b></div>
+     ${agg?'':'<button class="btn btn-yellow" id="invSaveBtn" style="width:100%;margin-top:12px" onclick="saveInventory()">Запази</button>'}
+     <div id="invMsg" style="margin-top:8px"></div>
+     <div class="inv-meta">Брутен оборот: ${Number(d.gross).toFixed(2)} € · ${d.cnt} продажби за месеца</div>
+   </div>`;
+  invRecalc();
+}
+
+async function saveInventory(){
+  const m=document.getElementById('invMonth');
+  if(invLocId<=0){ invShowMsg('Избери конкретен обект, за да запишеш.', false); return; }
+  const cb=document.getElementById('invOpeningManual');
+  const btn=document.getElementById('invSaveBtn'); if(btn){ btn.disabled=true; btn.textContent='Записване...'; }
+  const payload={
+    loc:invLocId, period:m.value,
+    opening_manual: (cb&&cb.checked)?1:0,
+    opening_balance: invF('invOpening'),
+    goods_received: invF('invReceived'),
+    markup_total: invF('invMarkup'),
+    transfer_in: invF('invTransferIn'),
+    markdown_total: invF('invMarkdown'),
+    transfer_out: invF('invTransferOut'),
+    note: (document.getElementById('invNote')||{}).value||''
+  };
+  try{
+    const res=await fetch(`${BASE}?ajax=inv_save`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(res.status===401){ showAuthExpired(); return; }
+    const d=await res.json();
+    if(d.ok){ invShowMsg('Записано ✓ (салдото се пренесе към следващия месец)', true); loadInventory(); }
+    else invShowMsg('Грешка: '+(d.error||''), false);
+  }catch(e){ invShowMsg('Грешка: '+e.message, false); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='Запази'; } }
+}
+window.saveInventory=saveInventory;
 
 loadLocTabs().then(()=>{ loadDashboard(); buildDhDayTabs(); });
 </script>
