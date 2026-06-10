@@ -1,18 +1,33 @@
-*.bak
-*.bak_*
-*.bak.*
+# Credentials & secrets
 config.php
-config_local.php
-.env
-.env.*
-/uploads/
-/photos/
-/tmp/
-/cache/
+vapid_private.txt
+*.env
+
+# Backups (твоята .bak_* конвенция)
+*.bak_*
+*.backup_*
+*_backup_*
+
+# Logs
 *.log
-/logs/
+logs/
+
+# Temp
+*.tmp
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
-*.swp
+
+# Database dumps
+*.sql
+*.sql.gz
+
+# тайни — НЕ в git
+vapid_private.txt
+vapid_public.txt
+# локален боклук
+.claude/
+uploads/
+*.bak
+*.bak.*
+*.backup
+*.log

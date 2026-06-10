@@ -110,19 +110,30 @@ if ($ajax === 'lookup_card') {
             $result['total_spent']     = round((float)($row['total_spent'] ?? 0), 2);
             $result['total_purchases'] = (int)($row['total_purchases'] ?? 0);
 
-            // 2) Активен ваучер
-            $vsql = "SELECT id, amount, voucher_type, percent_value, expires_at
+            // 2) Активен ваучер (LOYALTY_ENGINE_v2) — ВСИЧКИ активни, ще изберем най-голямата отстъпка от JS
+            $vsql = "SELECT id, amount, voucher_type, percent_value, expires_at, created_at
                      FROM vouchers
                      WHERE customer_id = :cid
                        AND status = 'active'
                        AND (used IS NULL OR used = 0)
                        AND (expires_at IS NULL OR expires_at > NOW())
-                     ORDER BY id DESC
-                     LIMIT 1";
+                     ORDER BY created_at ASC, id ASC";
             $vstmt = $pdo->prepare($vsql);
             $vstmt->execute(['cid' => $result['customer_id']]);
-            $v = $vstmt->fetch(PDO::FETCH_ASSOC);
-            if ($v) {
+            $allV = $vstmt->fetchAll(PDO::FETCH_ASSOC);
+            $result['active_vouchers'] = []; /* всички — за JS-а да избере най-голямата */
+            foreach ($allV as $v) {
+                $result['active_vouchers'][] = [
+                    'id'      => (int)$v['id'],
+                    'type'    => $v['voucher_type'] ?: 'fixed',
+                    'percent' => $v['percent_value'] !== null ? (int)$v['percent_value'] : null,
+                    'amount'  => round((float)($v['amount'] ?? 0), 2),
+                    'expires' => $v['expires_at'] ?: null,
+                ];
+            }
+            /* Назад-съвместимост — първият (най-старият) ваучер в стария формат */
+            if (!empty($allV)) {
+                $v = $allV[0];
                 $result['active_voucher_id']      = (int)$v['id'];
                 $result['active_voucher_amount']  = round((float)($v['amount'] ?? 0), 2);
                 $result['active_voucher_type']    = $v['voucher_type'] ?: 'fixed';
@@ -211,8 +222,9 @@ if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $voucherMarked = $v->rowCount() > 0;
         }
 
-        /* ── 3. Recompute customer totals (само при has_card=1) ── */
+        /* ── 3. Recompute customer totals + cycle броячи + auto-ваучери (LOYALTY_ENGINE_v2) ── */
         if ($customerId && $hasCard) {
+            /* Recompute totals (както преди) */
             $r = $pdo->prepare("UPDATE customers c
                 SET c.total_spent = COALESCE((
                         SELECT SUM(ps.amount) FROM purchase_scans ps
@@ -224,6 +236,72 @@ if ($ajax === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     ), 0)
                 WHERE c.id = :cid");
             $r->execute(['cid' => $customerId]);
+
+            /* Cycle броячи — increment (FIX_MILESTONE_BASE_v1) */
+            /* milestone брояч чете БАЗОВА сума (преди отстъпки), не final */
+            $saleAmount = (float)$final;        /* за turnover брояча — реално платеното */
+            $saleBase   = (float)$gross;        /* за milestone брояча — базовата стойност */
+            $eligibleMilestone = $saleBase >= 10 ? 1 : 0;
+            $pdo->prepare("UPDATE customers
+                SET cycle_spent_100 = cycle_spent_100 + :amt,
+                    cycle_purchases_10 = cycle_purchases_10 + :el,
+                    cycle_purchases_50 = cycle_purchases_50 + :el,
+                    cycle_purchases_100 = cycle_purchases_100 + :el
+                WHERE id = :cid")
+                ->execute(['amt'=>$saleAmount, 'el'=>$eligibleMilestone, 'cid'=>$customerId]);
+
+            /* Проверка за milestone достигнати → издай ваучери + reset брояча */
+            $cust = $pdo->prepare("SELECT cycle_spent_100, cycle_purchases_10, cycle_purchases_50, cycle_purchases_100 FROM customers WHERE id=:cid");
+            $cust->execute(['cid'=>$customerId]);
+            $cur = $cust->fetch(PDO::FETCH_ASSOC);
+
+            $milestones = [
+                ['col'=>'cycle_spent_100',     'threshold'=>100, 'type'=>'percent', 'percent'=>5,    'amount'=>null,  'code_prefix'=>'PCT5',    'source'=>'turnover',  'days'=>30],
+                ['col'=>'cycle_purchases_10',  'threshold'=>10,  'type'=>'fixed',   'percent'=>null, 'amount'=>5.00,  'code_prefix'=>'EUR5',    'source'=>'milestone', 'days'=>90],
+                ['col'=>'cycle_purchases_50',  'threshold'=>50,  'type'=>'fixed',   'percent'=>null, 'amount'=>50.00, 'code_prefix'=>'EUR50',   'source'=>'milestone', 'days'=>90],
+                ['col'=>'cycle_purchases_100', 'threshold'=>100, 'type'=>'fixed',   'percent'=>null, 'amount'=>150.00,'code_prefix'=>'EUR150',  'source'=>'milestone', 'days'=>90],
+            ];
+            foreach ($milestones as $m) {
+                if ((float)$cur[$m['col']] >= $m['threshold']) {
+                    /* Издай ваучер */
+                    $code = $m['code_prefix'] . '-' . $customerId . '-' . date('YmdHis');
+                    $expiresAt = date('Y-m-d H:i:s', strtotime('+' . $m['days'] . ' days'));
+                    $pdo->prepare("INSERT INTO vouchers (customer_id, code, voucher_type, percent_value, amount, status, used, source, expires_at, issued_at, created_at)
+                                   VALUES (:cid, :code, :vt, :pct, :amt, 'active', 0, :src, :exp, NOW(), NOW())")
+                        ->execute([
+                            'cid'=>$customerId,
+                            'code'=>$code,
+                            'vt'=>$m['type'],
+                            'pct'=>$m['percent'],
+                            'amt'=>$m['amount'],
+                            'src'=>$m['source'],
+                            'exp'=>$expiresAt,
+                        ]);
+                    /* PUSH_INTEGRATION_v1 — push notification за новата награда */
+                    try {
+                        if (!function_exists('sendPush')) {
+                            @include_once __DIR__ . '/push_helper.php';
+                        }
+                        if (function_exists('sendPush')) {
+                            $pushTitle = '🎉 Нова награда!';
+                            if ($m['type'] === 'percent') {
+                                $pushBody = 'Имаш нов ваучер: -' . $m['percent'] . '% отстъпка. Валиден до ' . date('d.m.Y', strtotime($expiresAt)) . '.';
+                            } else {
+                                $pushBody = 'Имаш нов ваучер: -' . number_format($m['amount'], 0) . ' € отстъпка. Валиден до ' . date('d.m.Y', strtotime($expiresAt)) . '.';
+                            }
+                            sendPush($pdo, $customerId, $pushTitle, $pushBody, 'auto', 'voucher_issued', '/loyalty/card.php');
+                        }
+                    } catch (Throwable $pe) { error_log('push voucher_issued: ' . $pe->getMessage()); }
+                    /* Reset брояча */
+                    if ($m['col'] === 'cycle_spent_100') {
+                        $pdo->prepare("UPDATE customers SET cycle_spent_100 = GREATEST(0, cycle_spent_100 - :t) WHERE id=:cid")
+                            ->execute(['t'=>$m['threshold'], 'cid'=>$customerId]);
+                    } else {
+                        $pdo->prepare("UPDATE customers SET {$m['col']} = GREATEST(0, {$m['col']} - :t) WHERE id=:cid")
+                            ->execute(['t'=>$m['threshold'], 'cid'=>$customerId]);
+                    }
+                }
+            }
         }
 
         /* ── 4. UPSERT в item_memory + item_variants (auto-fill памет) ── */
@@ -292,9 +370,8 @@ if ($ajax === 'history') {
                    has_card, customer_id
             FROM purchase_scans
             WHERE created_at BETWEEN :start AND :end
-              AND has_card = 0
               AND deleted_at IS NULL
-              $locCond
+              $locCond /* FIX_HISTORY_BADGE_v1 */
             ORDER BY created_at ASC
         ");
         $stmt->execute($params);
@@ -346,6 +423,7 @@ if ($ajax === 'history') {
                 'gross'       => (float)$row['final_total'] + (float)$row['discount'],
                 'final'       => (float)$row['final_total'],
                 'discount'    => (float)$row['discount'],
+                'has_card'    => (int)$row['has_card'],
                 'location'    => $row['location_name'] ?? '',
             ];
         }
@@ -394,6 +472,27 @@ if ($ajax === 'delete_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     c.total_purchases = COALESCE((SELECT COUNT(*) FROM purchase_scans WHERE customer_id=c.id AND deleted_at IS NULL), 0)
                 WHERE c.id=:cid");
             $r->execute(['cid'=>$cid]);
+
+            /* FIX_DELETE_CYCLE_v1 — recompute cycle броячи след изтриване */
+            $rc = $pdo->prepare("UPDATE customers c
+                SET c.cycle_spent_100 = COALESCE((
+                        SELECT SUM(ps.amount) FROM purchase_scans ps
+                         WHERE ps.customer_id=c.id AND ps.deleted_at IS NULL AND ps.has_card=1
+                    ), 0) MOD 100,
+                    c.cycle_purchases_10 = COALESCE((
+                        SELECT COUNT(*) FROM purchase_scans ps
+                         WHERE ps.customer_id=c.id AND ps.deleted_at IS NULL AND ps.has_card=1 AND ps.amount >= 10
+                    ), 0) MOD 10,
+                    c.cycle_purchases_50 = COALESCE((
+                        SELECT COUNT(*) FROM purchase_scans ps
+                         WHERE ps.customer_id=c.id AND ps.deleted_at IS NULL AND ps.has_card=1 AND ps.amount >= 10
+                    ), 0) MOD 50,
+                    c.cycle_purchases_100 = COALESCE((
+                        SELECT COUNT(*) FROM purchase_scans ps
+                         WHERE ps.customer_id=c.id AND ps.deleted_at IS NULL AND ps.has_card=1 AND ps.amount >= 10
+                    ), 0) MOD 100
+                WHERE c.id=:cid");
+            $rc->execute(['cid'=>$cid]);
         }
 
         $pdo->commit();
@@ -1226,27 +1325,31 @@ body::before{
 
 /* ═══ PRINT ═══ */
 @media print {
-  body{background:#fff !important;color:#000 !important}
-  body::before,body::after{display:none}
-  body *{visibility:hidden}
-  #printZone, #printZone *{visibility:visible;color:#000 !important}
+  /* PRINT_FIX_v1_NO_OVERLAP */
+  body{background:#fff !important;color:#000 !important;margin:0;padding:0}
+  body::before,body::after{display:none !important}
+  /* Скриваме всичко извън printZone с display:none — НЕ запазва място */
+  body > *:not(#printZone){display:none !important}
+  #printZone, #printZone *{color:#000 !important}
   #printZone{
-    display:block !important;position:fixed;top:0;left:0;
+    display:block !important;position:static !important;
     width:100%;padding:10px;background:#fff;
   }
-  .pr-header{text-align:center;margin-bottom:12px;border-bottom:2px solid #000;padding-bottom:8px}
+  .pr-header{text-align:center;margin-bottom:12px;border-bottom:2px solid #000;padding-bottom:8px;page-break-after:avoid}
   .pr-title{font-size:18px;font-weight:900}
   .pr-sub{font-size:12px;color:#555;margin-top:3px}
-  .pr-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+  .pr-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;page-break-inside:auto}
+  .pr-table thead{display:table-header-group}
+  .pr-table tr{page-break-inside:avoid;page-break-after:auto}
   .pr-table th{border-bottom:1px solid #000;padding:5px 4px;text-align:left;font-size:11px;text-transform:uppercase}
   .pr-table td{padding:6px 4px;border-bottom:1px solid #ddd}
   .pr-table td.right{text-align:right;font-weight:700}
-  .pr-totals{margin-top:10px;border-top:2px solid #000;padding-top:8px}
+  .pr-totals{margin-top:10px;border-top:2px solid #000;padding-top:8px;page-break-inside:avoid}
   .pr-tot-row{display:flex;justify-content:space-between;font-size:14px;padding:3px 0}
   .pr-tot-row.big{font-size:18px;font-weight:900}
   .pr-tot-row.red{color:#c00}
   .pr-footer{margin-top:16px;text-align:center;font-size:11px;color:#888;border-top:1px solid #ddd;padding-top:8px}
-  .pr-sale-block{margin-bottom:12px;padding-bottom:10px;border-bottom:1px dashed #ccc}
+  .pr-sale-block{margin-bottom:12px;padding-bottom:10px;border-bottom:1px dashed #ccc;page-break-inside:avoid}
   .pr-sale-head{display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:6px}
 }
 
@@ -1333,10 +1436,87 @@ body{transition:padding-bottom .25s ease}
 .lp-parked-row .pr-d{background:rgba(248,113,113,.2);color:#f87171}
 
 .lp-numpad-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+/* CLEANUP_v1 — ⌫ + ↩ split на 4-та колона */
+.lp-np-split{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:3px;
+}
+.lp-np-split .lp-np-half{
+  min-height:64px !important;
+  font-size:20px !important;
+  padding:0 !important;
+}
+.lp-return.lp-active{
+  background:linear-gradient(135deg,#dc2626,#b91c1c) !important;
+  color:#fff !important;
+  border-color:#dc2626 !important;
+}
+/* RETURN_MODE_VISUAL_v1 — body.return-mode → всичко червено */
+body.return-mode .sbox,
+body.return-mode .card-section,
+body.return-mode .items-label,
+body.return-mode #itemsList .item,
+body.return-mode .row-qty,
+body.return-mode .row-disc,
+body.return-mode .lp-numpad-zone{
+  background:linear-gradient(135deg,rgba(220,38,38,.18),rgba(127,29,29,.12)) !important;
+  border-color:rgba(220,38,38,.6) !important;
+  box-shadow:0 0 24px rgba(220,38,38,.3) !important;
+}
+body.return-mode .sbox::before{
+  content:'РЕЖИМ ВРЪЩАНЕ';
+  position:absolute;
+  top:8px; left:50%;
+  transform:translateX(-50%);
+  background:linear-gradient(135deg,#dc2626,#991b1b);
+  color:#fff;
+  padding:6px 18px;
+  border-radius:20px;
+  font:900 13px/1.2 system-ui;
+  letter-spacing:.1em;
+  z-index:50;
+  box-shadow:0 4px 14px rgba(220,38,38,.5);
+  pointer-events:none;
+}
+body.return-mode .sbox{
+  padding-top:42px !important;
+  position:relative;
+}
+/* CLEANUP_v1 — скрий старите дублиращи бутони */
+#addBtn, #saveBtn, #saveBtnTop, #returnModeBtn{ display:none !important; }
+/* NUMPAD_FIX_v2 — големи цифри + ПРИКЛЮЧИ малък отстрани */
+.lp-numpad-grid .lp-np{
+  min-height:64px !important;
+  font-size:28px !important;
+  font-weight:900 !important;
+}
+.lp-numpad-grid .lp-np.fn,
+.lp-numpad-grid .lp-np.lp-add,
+.lp-numpad-grid .lp-np.lp-finish,
+.lp-numpad-grid .lp-np.lp-alpha,
+.lp-numpad-grid .lp-np.lp-park{
+  font-size:14px !important;
+  font-weight:800 !important;
+}
+.lp-numpad-grid .lp-np.lp-finish{
+  background:linear-gradient(135deg,#22c55e,#16a34a) !important;
+  color:#fff !important;
+  border:none !important;
+}
+.lp-alpha{
+  background:linear-gradient(135deg,#8b5cf6,#7c3aed) !important;
+  color:#fff !important;
+  font-weight:800 !important;
+}
+.lp-alpha.active{
+  background:linear-gradient(135deg,#dc2626,#b91c1c) !important;
+}
 .lp-np{
-  height:42px;border-radius:12px;border:1px solid rgba(99,102,241,.18);
+  /* NUMPAD_BIGGER_v1 — +20% за маникюр */
+  height:50px;border-radius:12px;border:1px solid rgba(99,102,241,.18);
   background:rgba(15,23,42,.6);color:#f1f5f9;
-  font:900 18px/1 monospace;font-variant-numeric:tabular-nums;
+  font:900 22px/1 monospace;font-variant-numeric:tabular-nums;
   display:flex;align-items:center;justify-content:center;cursor:pointer;
   -webkit-tap-highlight-color:transparent;touch-action:manipulation;
   transition:all .12s;
@@ -1442,13 +1622,13 @@ body{transition:padding-bottom .25s ease}
   border:1px solid var(--border) !important;
 }
 
-/* S6: numpad −20% — по-малки бутони */
-.lp-np{height:36px !important;font-size:16px !important}
+/* NUMPAD_BIGGER_v1 — +20% върху S6 базата */
+.lp-np{height:44px !important;font-size:20px !important}
 .lp-np.fn{font-size:10px !important}
 .lp-np.lp-add, .lp-np.lp-finish{font-size:12px !important;height:40px !important}
 .lp-numpad-grid{gap:3px !important}
 .lp-numpad-zone{padding:6px 6px calc(8px + env(safe-area-inset-bottom,0px)) !important}
-body.lp-keypad-open{padding-bottom:300px !important}
+body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
 
 /* ═══════════════════════════════════════════════════════════════
    S6 LAYOUT: Код пълна ширина горе, Производител + Цена под
@@ -1571,6 +1751,7 @@ body.lp-keypad-open{padding-bottom:300px !important}
           <option>Дафи</option><option>Ареал</option><option>DX</option>
           <option>Ивон</option><option>Иватакс</option><option>Петков</option>
           <option>Роял Тайгър</option><option>Китайско</option>
+          <option>Чорапи</option><option>Чорапогащи</option><!-- ADD_BRANDS_CHORAPI_v1 -->
         </select>
       </div>
       <div>
@@ -1732,6 +1913,7 @@ const BIZ_DATE      = <?= json_encode($currentBizDate) ?>;
 
 /* S79.UNIFIED globals — ПРЕДИ всичко за избягване на TDZ */
 let scannedCard = '';
+let scanProcessing = false; /* FIX_SCAN_LOOP_v1 — lock срещу бибкане в loop */
 let scannedCustomerId = null;
 let scannedCustomerData = null;
 let givenAmount = '';
@@ -1866,22 +2048,158 @@ function hideVariantPicker(){
   const pk = document.getElementById('s9VariantPicker');
   if(pk) pk.style.display = 'none';
 }
+let _hideModeActive = false;
+function toggleHideMode(){
+  _hideModeActive = !_hideModeActive;
+  const ed = document.getElementById('s9EditToggle');
+  if(ed) ed.textContent = _hideModeActive ? '✎ изход' : '✎';
+  if(ed) ed.style.background = _hideModeActive ? '#dc2626' : 'transparent';
+  if(ed) ed.style.color = _hideModeActive ? '#fff' : '#6366f1';
+  if(!_hideModeActive){
+    _hidePending = [];
+    updateHideCounter();
+  }
+  const list = document.getElementById('s9VariantList');
+  if(list && list._lastVariants) showVariantPicker(list._lastVariants);
+}
+/* BATCH_HIDE_v1 — batch hide списък */
+let _hidePending = [];
+function toggleMarkForHide(code, brand, price, wrapEl){
+  const key = code + '||' + (brand||'') + '||' + price.toFixed(2);
+  const idx = _hidePending.findIndex(p => p.key === key);
+  if(idx >= 0){
+    _hidePending.splice(idx, 1);
+    if(wrapEl) { wrapEl.style.opacity = '1'; wrapEl.style.filter = ''; }
+  } else {
+    _hidePending.push({key, code, brand, price});
+    if(wrapEl) { wrapEl.style.opacity = '0.4'; wrapEl.style.filter = 'grayscale(1)'; }
+  }
+  updateHideCounter();
+}
+function updateHideCounter(){
+  const btn = document.getElementById('s9HideConfirm');
+  if(!btn) return;
+  if(_hidePending.length > 0){
+    btn.style.display = 'inline-block';
+    btn.textContent = '✓ Скрий ' + _hidePending.length;
+  } else {
+    btn.style.display = 'none';
+  }
+}
+async function confirmBatchHide(){
+  if(!_hidePending.length) return;
+  if(!confirm('Сигурен ли си? Ще скриеш ' + _hidePending.length + ' варианта.')) return;
+  let okCnt = 0, failCnt = 0;
+  for(const p of _hidePending){
+    try {
+      const res = await fetch('hide_variant.php', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({code: p.code, brand: p.brand, price: p.price})
+      });
+      const data = await res.json();
+      if(data.ok && data.hidden > 0) okCnt++; else failCnt++;
+    } catch(e){ failCnt++; }
+  }
+  s9dbg(okCnt + ' скрити' + (failCnt?' · '+failCnt+' грешки':''), 'rgba(0,150,50,.85)');
+  _hidePending = [];
+  _hideModeActive = false;
+  hideVariantPicker();
+  /* Re-lookup за свеж списък */
+  const codeNow = codeInput.value.trim();
+  if(codeNow && codeNow.length >= 2){
+    setTimeout(() => {
+      fetch('lookup_code.php?code=' + encodeURIComponent(codeNow))
+        .then(r => r.json())
+        .then(d => { if(d.ok && d.variants && d.variants.length) showVariantPicker(d.variants); });
+    }, 300);
+  }
+}
 function showVariantPicker(variants){
+  /* VARIANT_HIDE_v1 + PICKER_UX_v2 scroll-into-view */
   const pk = document.getElementById('s9VariantPicker');
   const list = document.getElementById('s9VariantList');
   if(!pk || !list) return;
+  list._lastVariants = variants;
+  /* Покажи picker-а първо */
+  pk.style.display = 'block';
+  /* CLEANUP_v1 — мануален scroll, по-надежден от scrollIntoView */
+  setTimeout(() => {
+    try {
+      const rect = pk.getBoundingClientRect();
+      const targetY = window.scrollY + rect.top - (window.innerHeight / 2) + (rect.height / 2);
+      window.scrollTo({top: Math.max(0, targetY), behavior: 'smooth'});
+    } catch(err){
+      try { pk.scrollIntoView({behavior: 'smooth', block: 'center'}); } catch(e){}
+    }
+  }, 80);
+  /* Header с ✎ бутон */
+  const header = pk.querySelector('div:first-child');
+  if(header && !document.getElementById('s9EditToggle')){
+    header.style.cssText = 'font:700 11px/1.4 system-ui;letter-spacing:.05em;text-transform:uppercase;color:#6366f1;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center';
+    const editBtn = document.createElement('button');
+    editBtn.id = 's9EditToggle';
+    editBtn.type = 'button';
+    editBtn.textContent = '✎';
+    editBtn.style.cssText = 'border:1px solid #6366f1;background:transparent;color:#6366f1;border-radius:6px;padding:2px 8px;font-size:13px;cursor:pointer;font-weight:700';
+    editBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleHideMode(); };
+    /* PICKER_UX_v2 — ✎ слиза долу, × горе вместо него */
+    editBtn.style.cssText = 'position:absolute;bottom:6px;right:8px;border:1px solid #6366f1;background:transparent;color:#6366f1;border-radius:6px;padding:2px 8px;font-size:13px;cursor:pointer;font-weight:700;z-index:6';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.id = 's9HideConfirm';
+    confirmBtn.type = 'button';
+    confirmBtn.textContent = '✓ Скрий 0';
+    confirmBtn.style.cssText = 'display:none;border:none;background:#dc2626;color:#fff;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:900;cursor:pointer;margin-right:6px';
+    confirmBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); confirmBatchHide(); };
+    /* × бутон горе вдясно — затваря picker + чисти codeInput */
+    const closeBtn = document.createElement('button');
+    closeBtn.id = 's9PickerClose';
+    closeBtn.type = 'button';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Затвори';
+    closeBtn.style.cssText = 'border:none;background:rgba(220,38,38,.15);color:#dc2626;border-radius:6px;padding:0 10px;font-size:20px;line-height:24px;cursor:pointer;font-weight:700';
+    closeBtn.onclick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      hideVariantPicker();
+      _hidePending = []; _hideModeActive = false;
+      if(typeof codeInput !== 'undefined' && codeInput){
+        codeInput.value = '';
+        try { codeInput.focus(); } catch(err){}
+      }
+    };
+    header.appendChild(confirmBtn);
+    header.appendChild(closeBtn);
+    /* editBtn (✎) отива в самия picker контейнер като absolute долу вдясно */
+    pk.style.position = 'relative';
+    pk.style.paddingBottom = '34px';
+    pk.appendChild(editBtn);
+  }
   list.innerHTML = '';
   variants.forEach((v, idx) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;display:inline-flex';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.style.cssText = 'padding:8px 14px;border-radius:999px;border:1.5px solid #6366f1;background:#fff;color:#6366f1;font:700 13px/1.2 system-ui;cursor:pointer;display:flex;align-items:center;gap:6px;touch-action:manipulation;-webkit-tap-highlight-color:transparent';
     const brandLabel = v.brand ? v.brand : '(без марка)';
     btn.innerHTML = '<span>' + brandLabel + '</span><span style="font-family:monospace;font-weight:900">' + v.price.toFixed(2) + ' €</span><span style="opacity:.5;font-size:10px">×' + v.use_count + '</span>';
+    /* × бутон за скриване (само в hide mode) */
+    if(_hideModeActive){
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '×';
+      x.style.cssText = 'position:absolute;top:-8px;right:-6px;width:22px;height:22px;border-radius:50%;background:#dc2626;color:#fff;border:2px solid #fff;font:900 14px/1 system-ui;cursor:pointer;z-index:5;padding:0;display:flex;align-items:center;justify-content:center';
+      x.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleMarkForHide(codeInput.value.trim(), v.brand || '', v.price, wrap); };
+      wrap.appendChild(x);
+    }
+    wrap.insertBefore(btn, wrap.firstChild);
+    list.appendChild(wrap);
 
     /* S9b.MOBILE FIX: prevent blur на code input + trigger веднага (pointerdown вместо click) */
     const onPick = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if(_hideModeActive) return; /* VARIANT_HIDE_v1 — в hide mode не добавяме */
       priceInput.value = v.price.toFixed(2);
       priceInput.dataset.autofilled = '1';
       priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
@@ -1898,6 +2216,15 @@ function showVariantPicker(variants){
       }
       hideVariantPicker();
       if(typeof updateStickyLive === 'function') updateStickyLive();
+      /* SOLUTION_D + CLEANUP_v1 — scroll към БР: реда за бърз избор */
+      setTimeout(() => {
+        try {
+          const qtyRow = document.querySelector('.row-qty');
+          if(qtyRow && qtyRow.scrollIntoView){
+            qtyRow.scrollIntoView({behavior: 'smooth', block: 'center'});
+          }
+        } catch(err){}
+      }, 100);
     };
     /* Mousedown/touchstart предотвратяват blur на codeInput */
     btn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1916,7 +2243,7 @@ function showVariantPicker(variants){
       onPick(e);
     });
     btn.addEventListener('pointercancel', () => { _startX = _startY = null; });
-    list.appendChild(btn);
+    /* VARIANT_HIDE_v1 — wrap е добавен горе */
   });
   pk.style.display = 'block';
 }
@@ -1933,6 +2260,9 @@ async function autoFillFromCode(code){
     hideVariantPicker();
     return;
   }
+
+  /* FIX_PICKER_REOPEN — блокирай ако току що сме addItem-нали */
+  if(window._pickerBlocked){ s9dbg('blocked (just added)', 'rgba(150,150,0,.85)'); hideVariantPicker(); return; }
 
   s9dbg('Lookup: ' + code + '...', 'rgba(0,80,150,.85)');
 
@@ -1952,34 +2282,9 @@ async function autoFillFromCode(code){
     const variants = data.variants || [];
     if(variants.length === 0){ s9dbg('Empty variants', 'rgba(150,100,0,.85)'); hideVariantPicker(); return; }
 
-    if(variants.length === 1){
-      /* Един вариант → auto-fill директно */
-      const v = variants[0];
-      hideVariantPicker();
-      if(v.price && _curPrice <= 0){
-        priceInput.value = v.price.toFixed(2);
-        priceInput.dataset.autofilled = '1';
-        priceInput.style.background = 'rgba(76, 175, 80, 0.15)';
-        setTimeout(() => { priceInput.style.background = ''; }, 1500);
-      }
-      let brandSet = '';
-      if(v.brand && brandSelect && !brandSelect.value){
-        for(let i = 0; i < brandSelect.options.length; i++){
-          if(brandSelect.options[i].text === v.brand || brandSelect.options[i].value === v.brand){
-            brandSelect.selectedIndex = i;
-            brandSelect.classList.add('chosen');
-            brandSelect.dataset.autofilled = '1';
-            brandSet = ' + ' + v.brand;
-            break;
-          }
-        }
-      }
-      s9dbg('✓ ' + v.price.toFixed(2) + ' €' + brandSet, 'rgba(0,150,50,.85)');
-    } else {
-      /* Множество варианти → показва picker */
-      showVariantPicker(variants);
-      s9dbg(variants.length + ' варианта — избери', 'rgba(150,80,0,.85)');
-    }
+    /* VARIANT_HIDE_v1 — picker винаги, дори за 1 вариант (Tихол: за чистене на грешни) */
+    showVariantPicker(variants);
+    s9dbg(variants.length + ' вариант' + (variants.length>1?'а':'') + ' — избери', 'rgba(150,80,0,.85)');
 
     if(typeof updateStickyLive === 'function') updateStickyLive();
   } catch(err){
@@ -2051,6 +2356,11 @@ function addItem(){
   const actualBase  = returnMode ? -Math.abs(base)   : base;
   const actualFinal = returnMode ? -Math.abs(final)  : final;
 
+  /* FIX_PICKER_REOPEN — блокирай auto-fill до 1 секунда */
+  window._pickerBlocked = true;
+  if(typeof _lookupTimer !== 'undefined' && _lookupTimer) { clearTimeout(_lookupTimer); _lookupTimer = null; }
+  setTimeout(() => { window._pickerBlocked = false; }, 1000);
+
   items.push({ id: Date.now(), code, brand, qty: actualQty, price, disc: selDisc, base: actualBase, final: actualFinal });
 
   // Ресет полета
@@ -2067,10 +2377,22 @@ function addItem(){
     try { document.activeElement.blur(); } catch(e){}
   }
 
+  // FIX_PICKER_CLOSE — затвори picker-а директно (не разчитай на input event)
+  try { if(typeof hideVariantPicker === 'function') hideVariantPicker(); } catch(e){}
+
   // FIX: Return mode — auto-off след 1 артикул на минус
   if(returnMode){ toggleReturnMode(); }
 
-  document.body.scrollTop = 0; document.documentElement.scrollTop = 0;
+  /* PICKER_UX_v2 — scroll към codeInput (не към върха), за да остане видима за следващ артикул */
+  try {
+    setTimeout(() => {
+      if(codeInput && codeInput.scrollIntoView){
+        codeInput.scrollIntoView({behavior: 'smooth', block: 'center'});
+      }
+    }, 80);
+  } catch(err){
+    document.body.scrollTop = 0; document.documentElement.scrollTop = 0;
+  }
 
   // Запази сесията
   if(typeof saveSessionState === 'function') saveSessionState();
@@ -2113,25 +2435,113 @@ function render(){
 }
 window.delItem = id => { items=items.filter(i=>i.id!==id); render(); updateTotals(); };
 
-/* ── Тоталне ── */
+/* ── Тоталне — FIX_VOUCHER_AUTO_APPLY_v1 ── */
+let voucherAppliedAmount = 0; /* колко € е свалил ваучерът (за save handler) */
+let voucherAppliedLabel = '';  /* "Welcome -5%" или "Birthday -20%" — за prompt-а */
+
 function updateTotals(){
-  const base  = items.reduce((s,i)=>s+i.base,  0);
-  const final = items.reduce((s,i)=>s+i.final, 0);
-  const disc  = base - final;
-  const isReturn = final < 0;
+  const base       = items.reduce((s,i)=>s+i.base,  0);
+  let   afterManual = items.reduce((s,i)=>s+i.final, 0);  /* след ръчни отстъпки */
+  const manualDisc  = base - afterManual;                  /* колко свалиха ръчните */
+  const isReturn    = afterManual < 0;
+
+  /* FIX_VOUCHER_AUTO_APPLY_v1 — автоматично прилагане на ваучер върху сметката СЛЕД ръчните */
+  voucherAppliedAmount = 0;
+  voucherAppliedLabel  = '';
+  let finalAfterVoucher = afterManual;
+
+  /* LOYALTY_ENGINE_v2 — избор на най-голямата отстъпка от всички активни ваучери */
+  let bestVoucherId = null;
+  if (!isReturn && scannedCustomerData && afterManual > 0) {
+    const vouchers = scannedCustomerData.active_vouchers || [];
+    let bestDiscount = 0;
+    let bestLabel = '';
+    let bestId = null;
+    if (vouchers.length === 0 && scannedCustomerData.active_voucher_id) {
+      /* fallback за стар API формат */
+      vouchers.push({
+        id: scannedCustomerData.active_voucher_id,
+        type: scannedCustomerData.active_voucher_type,
+        percent: scannedCustomerData.active_voucher_percent,
+        amount: scannedCustomerData.active_voucher_amount
+      });
+    }
+    for (const v of vouchers) {
+      const pct = parseFloat(v.percent || 0);
+      const amt = parseFloat(v.amount || 0);
+      let candidateDiscount = 0;
+      let candidateLabel = '';
+      if (pct > 0) {
+        candidateDiscount = Math.round(afterManual * pct) / 100;
+        candidateLabel = 'Ваучер −' + pct + '%';
+      } else if (amt > 0) {
+        candidateDiscount = Math.min(amt, afterManual);
+        candidateLabel = 'Ваучер −' + candidateDiscount.toFixed(2) + ' €';
+      }
+      /* При равенство по-старият печели (vouchers вече са ORDER BY created_at ASC) */
+      if (candidateDiscount > bestDiscount) {
+        bestDiscount = candidateDiscount;
+        bestLabel = candidateLabel;
+        bestId = v.id;
+      }
+    }
+    if (bestDiscount > 0) {
+      voucherAppliedAmount = bestDiscount;
+      finalAfterVoucher    = Math.round((afterManual - bestDiscount) * 100) / 100;
+      voucherAppliedLabel  = bestLabel;
+      bestVoucherId        = bestId;
+    }
+  }
+  /* Запомняме избрания ваучер за save handler-а */
+  window._chosenVoucherId = bestVoucherId;
+
+  const finalDisplay = finalAfterVoucher;
+  const totalDisc    = manualDisc + voucherAppliedAmount;
+
   document.getElementById('tBase').textContent  = (base < 0 ? '−' : '') + Math.abs(base).toFixed(2) + ' €';
-  document.getElementById('tDisc').textContent  = disc > 0 ? '−'+disc.toFixed(2)+' €' : '—';
-  document.getElementById('tFinal').textContent = (isReturn ? '−' : '') + Math.abs(final).toFixed(2) + ' €';
+  document.getElementById('tDisc').textContent  = totalDisc > 0 ? '−'+totalDisc.toFixed(2)+' €' : '—';
+  document.getElementById('tFinal').textContent = (isReturn ? '−' : '') + Math.abs(finalDisplay).toFixed(2) + ' €';
   document.getElementById('tFinal').style.color = isReturn ? 'var(--red)' : '';
-  document.getElementById('hTotal').textContent = (isReturn ? '−' : '') + Math.abs(final).toFixed(2) + ' €';
-  /* S79.UNIFIED */
+  document.getElementById('hTotal').textContent = (isReturn ? '−' : '') + Math.abs(finalDisplay).toFixed(2) + ' €';
+
+  /* S79.UNIFIED — pay секция показва крайната сума СЛЕД ваучера */
   try {
     const payEl = document.getElementById('payAmountBig');
-    if(payEl) payEl.textContent = (isReturn ? '−' : '') + Math.abs(final).toFixed(2) + ' €';
+    if(payEl) payEl.textContent = (isReturn ? '−' : '') + Math.abs(finalDisplay).toFixed(2) + ' €';
     const exactBtn = document.getElementById('exactBtn');
-    if(exactBtn) exactBtn.textContent = '= Точна сума (' + Math.abs(final).toFixed(2) + ' €)';
+    if(exactBtn) exactBtn.textContent = '= Точна сума (' + Math.abs(finalDisplay).toFixed(2) + ' €)';
     if(typeof updateChange === 'function') updateChange();
   } catch(e){ console.warn('updateTotals extra:', e); }
+
+  /* FIX_VOUCHER_AUTO_APPLY_v1 — индикатор в pay секцията */
+  try {
+    let breakdown = document.getElementById('payBreakdown');
+    if (!breakdown) {
+      const payEl = document.getElementById('payAmountBig');
+      if (payEl && payEl.parentElement) {
+        breakdown = document.createElement('div');
+        breakdown.id = 'payBreakdown';
+        breakdown.style.cssText = 'font-size:13px;font-weight:700;line-height:1.6;margin-top:8px;padding:10px;background:#f8f8f8;border-radius:8px;color:#444';
+        payEl.parentElement.appendChild(breakdown);
+      }
+    }
+    if (breakdown) {
+      if (totalDisc > 0 && !isReturn) {
+        let html = '<div style="display:flex;justify-content:space-between"><span>Базова сума:</span><span>' + base.toFixed(2) + ' €</span></div>';
+        if (manualDisc > 0) {
+          html += '<div style="display:flex;justify-content:space-between;color:#c00"><span>Ръчна отстъпка:</span><span>−' + manualDisc.toFixed(2) + ' €</span></div>';
+        }
+        if (voucherAppliedAmount > 0) {
+          html += '<div style="display:flex;justify-content:space-between;color:#16a34a"><span>' + voucherAppliedLabel + ':</span><span>−' + voucherAppliedAmount.toFixed(2) + ' €</span></div>';
+        }
+        html += '<div style="display:flex;justify-content:space-between;font-size:15px;font-weight:900;border-top:1px solid #ddd;margin-top:6px;padding-top:6px"><span>РЕАЛНО:</span><span>' + finalDisplay.toFixed(2) + ' €</span></div>';
+        breakdown.innerHTML = html;
+        breakdown.style.display = 'block';
+      } else {
+        breakdown.style.display = 'none';
+      }
+    }
+  } catch(e) {}
 }
 
 /* ── Запиши продажба ── */
@@ -2142,8 +2552,10 @@ saveBtn.addEventListener('click', async () => {
   saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg><span>Записване...</span>';
   saveResult.style.display = 'none';
 
-  const base  = items.reduce((s,i)=>s+i.base,  0);
-  const final = items.reduce((s,i)=>s+i.final, 0);
+  const base        = items.reduce((s,i)=>s+i.base,  0);
+  const afterManual = items.reduce((s,i)=>s+i.final, 0);
+  /* FIX_VOUCHER_AUTO_APPLY_v1 — final СЛЕД ваучер; voucherAppliedAmount е глобален от updateTotals */
+  const final = Math.round((afterManual - (voucherAppliedAmount||0)) * 100) / 100;
   const disc  = base - final;
 
   // Timeout — ако сървърът не отговори за 15 сек, отключваме бутона
@@ -2169,7 +2581,9 @@ saveBtn.addEventListener('click', async () => {
         has_card: scannedCard ? 1 : 0,
         customer_id: scannedCustomerId || null,
         /* S5-REWRITE: voucher_id за mark used */
-        voucher_id: (scannedCustomerData && scannedCustomerData.active_voucher_id) ? scannedCustomerData.active_voucher_id : null,
+        /* LOYALTY_ENGINE_v2 — праща ИЗБРАНИЯ ваучер (най-голямата отстъпка), не най-стария */
+        voucher_id: (voucherAppliedAmount > 0 && window._chosenVoucherId) ? window._chosenVoucherId : null,
+        voucher_discount: voucherAppliedAmount || 0,
         given_amount: givenAmount !== '' ? parseFloat(givenAmount) : null,
         change_amount: givenAmount !== '' ? Math.round((parseFloat(givenAmount) - Math.abs(final)) * 100) / 100 : null,
         payment_method: paymentMethod,
@@ -2190,10 +2604,18 @@ saveBtn.addEventListener('click', async () => {
       qtyCustom.value=''; brandSelect.value='';
       brandSelect.classList.remove('chosen');
       /* S79.UNIFIED reset */
+      scanProcessing = false; /* FIX_SCAN_LOOP_v1 — reset след продажба */
       scannedCard=''; scannedCustomerId=null; scannedCustomerData=null;
       const _cb=document.getElementById('clientBlock'); if(_cb) _cb.style.display='none';
       const _ci=document.getElementById('cardInput'); if(_ci) _ci.value='';
       const _cs=document.getElementById('cardSection'); if(_cs) _cs.classList.remove('active');
+      /* FIX_HISTORY_BADGE_v1 — reset tbCardPill */
+      const _tbPill = document.getElementById('tbCardPill');
+      if(_tbPill) _tbPill.classList.remove('has-card');
+      const _tbLbl  = document.getElementById('tbCardLabel');
+      if(_tbLbl) _tbLbl.textContent = 'Карта';
+      if(typeof lastScan !== 'undefined') { lastScan = ''; lastScanTs = 0; }
+      window._chosenVoucherId = null;
       givenAmount='';
       const _gi=document.getElementById('givenInput'); if(_gi) _gi.value='';
       if(typeof renderGiven==='function') renderGiven();
@@ -2364,7 +2786,7 @@ function renderFullscreen(){
       const isReturn = sale.final < 0;
       html += `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border2);${isReturn?'background:#fff5f5;border-radius:8px;padding:8px;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-size:18px;font-weight:900">${esc(sale.time)}</span>
+          <span style="font-size:18px;font-weight:900">${esc(sale.time)}</span>${sale.has_card==1 ? '<span style="display:inline-block;margin-left:8px;padding:2px 8px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;font-size:10px;font-weight:900;letter-spacing:.3px;border-radius:999px;vertical-align:middle">С ЛОЯЛНА КАРТА</span>' : ''}
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:16px;font-weight:900;color:${isReturn?'var(--red)':'var(--blue)'}">
               ${isReturn?'−':''}${Math.abs(sale.final).toFixed(2)} €
@@ -2400,8 +2822,12 @@ window.deleteSale = async function(id) {
     url.searchParams.set('ajax','delete_sale');
     const res  = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})});
     const data = await res.json();
-    if (data.ok) loadHistory();
-    else alert('Грешка: ' + (data.error||'?'));
+    if (data.ok) {
+      /* FIX_DELETE_AND_PRINT_v1 — пре-renderирай fullscreen ако е отворен */
+      await loadHistory();
+      const fs = document.getElementById('fsOverlay');
+      if (fs && !fs.classList.contains('hidden')) renderFullscreen();
+    } else alert('Грешка: ' + (data.error||'?'));
   } catch(e) { alert('Грешка: ' + e.message); }
 };
 
@@ -2534,9 +2960,6 @@ function printHistory(){
       <div class="pr-tot-row big"><span>РЕАЛНО ВЗЕТО</span><span>${data.day_final.toFixed(2)} €</span></div>
     </div>
 
-    <div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;border-top:1px solid #ddd;padding-top:10px">Продажби по час</div>
-    ${salesHtml}
-
     <div class="pr-footer">Ени Тихолов · ${esc(LOCATION_NAME || '')} · Отпечатано: ${new Date().toLocaleString('bg-BG')}</div>`;
 
   window.print();
@@ -2607,9 +3030,11 @@ function initQr(){
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 200, height: 200 }, aspectRatio: 1 },
       (text) => {
+        if(scanProcessing) return; /* FIX_SCAN_LOOP_v1 — blokira loop scans */
         const now = Date.now();
         if(text === lastScan && now - lastScanTs < 1500) return;
         lastScan = text; lastScanTs = now;
+        scanProcessing = true; /* lock-ва се до clearCardVisual или save */
         const card = text.includes(':') ? text.split(':')[0] : text;
         const ci = document.getElementById('cardInput');
         if(ci) ci.value = card;
@@ -2755,6 +3180,7 @@ function onCardEntered(card){
     .catch(()=>{}); // мълчи при грешка — картата вече е показана
 }
 function clearCardVisual(){
+  scanProcessing = false; /* FIX_SCAN_LOOP_v1 — освобождава scan lock */
   scannedCard=''; scannedCustomerId=null; scannedCustomerData=null;
   const cb=document.getElementById('clientBlock'); if(cb) cb.style.display='none';
   const cv=document.getElementById('clientVoucher'); if(cv){ cv.style.display='none'; cv.innerHTML=''; }
@@ -3077,8 +3503,11 @@ setTimeout(restoreSessionState, 200);
         lbl.className = 'lp-ctx-label lp-ctx-price';
       }
     }
-    document.getElementById('lpBtnCod').classList.toggle('lp-active', ctx === 'code');
-    document.getElementById('lpBtnCena').classList.toggle('lp-active', ctx === 'price');
+    /* FIX_NULL_BUTTONS — бутоните КОД/ЦЕНА вече не съществуват (NUMPAD_REDESIGN_v1) */
+    const _bCod  = document.getElementById('lpBtnCod');
+    const _bCena = document.getElementById('lpBtnCena');
+    if(_bCod)  _bCod.classList.toggle('lp-active', ctx === 'code');
+    if(_bCena) _bCena.classList.toggle('lp-active', ctx === 'price');
   };
 
   window.lpNumPress = function(key){
@@ -3126,8 +3555,114 @@ setTimeout(restoreSessionState, 200);
     });
   }
 
+  /* NUMPAD_REDESIGN_v1 — Android клавиатура toggle за букви */
+  window._alphaKeyboardActive = false;
+  window.lpToggleAlphaKeyboard = function(){
+    /* NUMPAD_FIX_v2 — Android клавиатура fix */
+    const target = (typeof lpCtx !== 'undefined' && lpCtx === 'price') ? priceInput : codeInput;
+    const btn = document.getElementById('lpBtnAlpha');
+    if(!target) return;
+    if(window._alphaKeyboardActive){
+      target.setAttribute('readonly', 'readonly');
+      target.setAttribute('inputmode', 'none');
+      try { target.blur(); } catch(e){}
+      window._alphaKeyboardActive = false;
+      if(btn){ btn.classList.remove('active'); btn.textContent = 'АБВ'; }
+      lpOpenKeypad();
+    } else {
+      /* Свали readonly ПРЕДИ да затворим numpad-а */
+      target.removeAttribute('readonly');
+      target.setAttribute('inputmode', 'text');
+      target.setAttribute('type', 'text');
+      window._alphaKeyboardActive = true;
+      if(btn){ btn.classList.add('active'); btn.textContent = '123'; }
+      lpCloseKeypad();
+      /* User-initiated focus трябва да е САМО в onclick stack — затова без setTimeout */
+      try {
+        target.focus();
+        /* iOS hack — selectionStart trigger */
+        try { target.setSelectionRange(target.value.length, target.value.length); } catch(e){}
+      } catch(e){ console.warn('focus failed', e); }
+    }
+  };
+
+  /* Auto-reset alpha mode когато се отвори numpad-ът обратно */
+  const origOpen = window.lpOpenKeypad;
+  window.lpOpenKeypad = function(){
+    if(window._alphaKeyboardActive){
+      if(codeInput) codeInput.setAttribute('readonly','readonly');
+      if(priceInput) priceInput.setAttribute('readonly','readonly');
+      if(codeInput) codeInput.setAttribute('inputmode','none');
+      if(priceInput) priceInput.setAttribute('inputmode','none');
+      window._alphaKeyboardActive = false;
+      const btn = document.getElementById('lpBtnAlpha');
+      if(btn){ btn.classList.remove('active'); btn.textContent = 'АБВ'; }
+    }
+    origOpen();
+  };
+
+  /* + Добави visibility: показва се само ако picker не излиза + има въведен код */
+  window.lpUpdateAddVisibility = function(){
+    /* SOLUTION_D — двата винаги видими, no-op */
+    const addBtn = document.getElementById('lpAddBtn');
+    const finBtn = document.getElementById('lpFinishBtn');
+    if(addBtn) addBtn.style.display = '';
+    if(finBtn) finBtn.style.display = '';
+  };
+
+  /* Trigger updateAddVisibility при промяна на код или picker */
+  if(codeInput){
+    codeInput.addEventListener('input', () => setTimeout(window.lpUpdateAddVisibility, 50));
+    codeInput.addEventListener('blur',  () => setTimeout(window.lpUpdateAddVisibility, 250));
+  }
+  if(priceInput){
+    priceInput.addEventListener('input', () => setTimeout(window.lpUpdateAddVisibility, 50));
+    priceInput.addEventListener('blur',  () => setTimeout(window.lpUpdateAddVisibility, 250));
+  }
+  /* Хак: следим picker visibility през MutationObserver */
+  const _pkObs = new MutationObserver(() => window.lpUpdateAddVisibility());
+  setTimeout(() => {
+    const pkEl = document.getElementById('s9VariantPicker');
+    if(pkEl){ _pkObs.observe(pkEl, {attributes: true, attributeFilter: ['style']}); }
+  }, 500);
+
+  /* CLEANUP_v1 — синхронизира ↩ от numpad с returnMode логиката */
+  window.lpToggleReturnFromNumpad = function(){
+    if(typeof toggleReturnMode === 'function'){
+      toggleReturnMode();
+    }
+    /* RETURN_MODE_VISUAL_v1 — обнови визуален state + body class */
+    window.lpSyncReturnVisual();
+  };
+  window.lpSyncReturnVisual = function(){
+    const rb = document.getElementById('lpReturnBtn');
+    const isReturn = (typeof returnMode !== 'undefined' && returnMode);
+    if(rb){
+      if(isReturn) rb.classList.add('lp-active');
+      else rb.classList.remove('lp-active');
+    }
+    if(isReturn) document.body.classList.add('return-mode');
+    else document.body.classList.remove('return-mode');
+  };
+  /* Observer върху returnModeBtn — синхронизира state при auto-off след addItem */
+  setTimeout(() => {
+    const rmBtn = document.getElementById('returnModeBtn');
+    if(rmBtn){
+      const obs = new MutationObserver(() => window.lpSyncReturnVisual());
+      obs.observe(rmBtn, {attributes: true, attributeFilter: ['class']});
+    }
+    /* Също polling fallback на всеки 300ms за state sync */
+    setInterval(() => {
+      const rb = document.getElementById('lpReturnBtn');
+      const isReturn = (typeof returnMode !== 'undefined' && returnMode);
+      const hasActive = rb && rb.classList.contains('lp-active');
+      if(isReturn !== hasActive) window.lpSyncReturnVisual();
+    }, 300);
+  }, 500);
+
   /* Initial */
   setTimeout(() => lpSetCtx('code'), 100);
+  setTimeout(() => window.lpUpdateAddVisibility(), 200);
 
   /* ═══ PARKING ═══ */
   const PARK_KEY = 'loyalty_parked_' + (typeof LOCATION_ID !== 'undefined' ? LOCATION_ID : 'g');
@@ -3342,25 +3877,27 @@ setTimeout(restoreSessionState, 200);
     <button class="lp-np" onclick="lpNumPress('1')">1</button>
     <button class="lp-np" onclick="lpNumPress('2')">2</button>
     <button class="lp-np" onclick="lpNumPress('3')">3</button>
-    <button class="lp-np fn" onclick="lpNumPress('back')">⌫</button>
+    <!-- CLEANUP_v1 — ⌫ + ↩ split, всеки на половин ширина -->
+    <div class="lp-np-split">
+      <button class="lp-np fn lp-np-half" onclick="lpNumPress('back')" title="Триене">⌫</button>
+      <button class="lp-np fn lp-np-half lp-return" onclick="lpToggleReturnFromNumpad()" id="lpReturnBtn" title="Връщане"><span style="display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;gap:2px"><span style="font-size:18px">↩</span><span style="font-size:9px;font-weight:900;letter-spacing:.05em">ВРЪЩ.</span></span></button>
+    </div>
 
     <button class="lp-np" onclick="lpNumPress('4')">4</button>
     <button class="lp-np" onclick="lpNumPress('5')">5</button>
     <button class="lp-np" onclick="lpNumPress('6')">6</button>
-    <button class="lp-np fn lp-cena" onclick="lpSetCtx('price')" id="lpBtnCena">ЦЕНА</button>
+    <button class="lp-np fn lp-alpha" onclick="lpToggleAlphaKeyboard()" id="lpBtnAlpha">АБВ</button>
 
     <button class="lp-np" onclick="lpNumPress('7')">7</button>
     <button class="lp-np" onclick="lpNumPress('8')">8</button>
     <button class="lp-np" onclick="lpNumPress('9')">9</button>
-    <button class="lp-np fn lp-cena" onclick="lpSetCtx('code')" id="lpBtnCod">КОД</button>
+    <button class="lp-np fn lp-park" onclick="lpParkSale()">ПАРКИРАЙ</button>
 
     <button class="lp-np" onclick="lpNumPress('.')">.</button>
     <button class="lp-np" onclick="lpNumPress('0')">0</button>
-    <button class="lp-np fn clear" onclick="lpNumPress('C')">C</button>
-    <button class="lp-np fn lp-park" onclick="lpParkSale()">ПАРКИРАЙ</button>
-
-    <button class="lp-np lp-add" onclick="if(addBtn) addBtn.click();">+ Добави</button>
-    <button class="lp-np lp-finish" onclick="lpOpenConfirm()">Приключи</button>
+    <!-- SOLUTION_D — двата винаги видими на 4-ти ред: + Добави 3-та, ПРИКЮЧИ 4-та -->
+    <button class="lp-np lp-add" onclick="if(addBtn) addBtn.click();" id="lpAddBtn" style="grid-column:3">+ Добави</button>
+    <button class="lp-np lp-finish" onclick="lpOpenConfirm()" id="lpFinishBtn" style="grid-column:4">ПРИКЛЮЧИ</button>
   </div>
 </div>
 
@@ -3415,6 +3952,7 @@ setTimeout(restoreSessionState, 200);
     <button type="button" class="pin-cancel" onclick="pinCancel()">Отказ</button>
   </div>
 </div>
+
 
 </body>
 </html>

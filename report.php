@@ -66,6 +66,7 @@ $totalFinal  = 0.0;
 $totalDisc   = 0.0;
 $scanCount   = 0;
 $calcCount   = 0;
+$discountLog = [];
 
 // При филтър по конкретен обект — включваме и записи с NULL location_id
 // само ако има само 1 обект (1 магазин не е задавал location никога)
@@ -98,7 +99,7 @@ try {
         if ($locationId > 0) $params['loc'] = $locationId;
 
         $stmt = $pdo->prepare("
-            SELECT created_at, amount, discount_amount, calc_payload
+            SELECT created_at, amount, discount_amount, calc_payload, location_name
             FROM purchase_scans
             WHERE created_at BETWEEN :start AND :end $locCond
             ORDER BY created_at ASC
@@ -107,9 +108,36 @@ try {
 
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $scanCount++;
-            $totalFinal += (float)$row['amount'];
-            $totalDisc  += (float)$row['discount_amount'];
-            $totalGross += (float)$row['amount'] + (float)$row['discount_amount'];
+            $rFinal = (float)$row['amount'];
+            $rDisc  = (float)$row['discount_amount'];
+            $rGross = $rFinal + $rDisc;
+            $totalFinal += $rFinal;
+            $totalDisc  += $rDisc;
+            $totalGross += $rGross;
+
+            if ($rDisc > 0) {
+                $rowItems = [];
+                $rawDL = $row['calc_payload'] ?? null;
+                $decDL = $rawDL ? json_decode($rawDL, true) : null;
+                if (is_array($decDL)) foreach ($decDL as $it) {
+                    $p = round((float)($it['price'] ?? 0), 2);
+                    if ($p <= 0) continue;
+                    $rowItems[] = [
+                        'code'=>trim((string)($it['code'] ?? '')),
+                        'brand'=>trim((string)($it['brand'] ?? $it['model'] ?? '')),
+                        'qty'=>max(1,(int)($it['qty'] ?? 1)), 'price'=>$p,
+                        'disc'=>(int)($it['disc'] ?? $it['discount'] ?? 0),
+                        'final'=>round((float)($it['final'] ?? 0), 2),
+                    ];
+                }
+                $discountLog[] = [
+                    'time'  => substr((string)$row['created_at'], 11, 5),
+                    'loc'   => trim((string)($row['location_name'] ?? '')) ?: '-',
+                    'gross' => $rGross, 'final' => $rFinal, 'disc' => $rDisc,
+                    'pct'   => $rGross > 0 ? round($rDisc / $rGross * 100) : 0,
+                    'source'=> 'scan', 'items' => $rowItems,
+                ];
+            }
 
             $raw = $row['calc_payload'] ?? null;
             if (!$raw) continue;
@@ -142,7 +170,7 @@ if (tableExists($pdo, 'calc_sales')) {
         if ($locationId > 0) $params['loc'] = $locationId;
 
         $stmt = $pdo->prepare("
-            SELECT created_at, gross_total, final_total, discount, items_json
+            SELECT created_at, gross_total, final_total, discount, items_json, location_name
             FROM calc_sales
             WHERE created_at BETWEEN :start AND :end $locCond
             ORDER BY created_at ASC
@@ -151,9 +179,35 @@ if (tableExists($pdo, 'calc_sales')) {
 
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $calcCount++;
-            $totalFinal += (float)$row['final_total'];
-            $totalDisc  += (float)$row['discount'];
-            $totalGross += (float)$row['gross_total'];
+            $rGross = (float)$row['gross_total'];
+            $rFinal = (float)$row['final_total'];
+            $rDisc  = (float)$row['discount'];
+            $totalFinal += $rFinal;
+            $totalDisc  += $rDisc;
+            $totalGross += $rGross;
+
+            if ($rDisc > 0) {
+                $rowItems = [];
+                $decDL = json_decode((string)$row['items_json'], true);
+                if (is_array($decDL)) foreach ($decDL as $it) {
+                    $p = round((float)($it['price'] ?? 0), 2);
+                    if ($p <= 0) continue;
+                    $rowItems[] = [
+                        'code'=>trim((string)($it['code'] ?? '')),
+                        'brand'=>trim((string)($it['brand'] ?? '')),
+                        'qty'=>max(1,(int)($it['qty'] ?? 1)), 'price'=>$p,
+                        'disc'=>(int)($it['disc'] ?? 0),
+                        'final'=>round((float)($it['final'] ?? 0), 2),
+                    ];
+                }
+                $discountLog[] = [
+                    'time'  => substr((string)$row['created_at'], 11, 5),
+                    'loc'   => trim((string)($row['location_name'] ?? '')) ?: '-',
+                    'gross' => $rGross, 'final' => $rFinal, 'disc' => $rDisc,
+                    'pct'   => $rGross > 0 ? round($rDisc / $rGross * 100) : 0,
+                    'source'=> 'calc', 'items' => $rowItems,
+                ];
+            }
 
             $decoded = json_decode((string)$row['items_json'], true);
             if (!is_array($decoded)) continue;
@@ -198,6 +252,8 @@ usort($agg, fn($a,$b) => strcmp((string)$a['code'], (string)$b['code']));
 
 $totalCount = $scanCount + $calcCount;
 $discPct    = $totalGross > 0 ? round(($totalDisc / $totalGross) * 100, 1) : 0;
+
+usort($discountLog, fn($a,$b) => strcmp($a['time'], $b['time']));
 
 /* ── 7 дена назад за табовете ── */
 $tzDays = new DateTimeZone('Europe/Sofia');
@@ -286,6 +342,30 @@ body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--tex
 
 /* Празно */
 .empty{text-align:center;padding:30px;color:var(--text3);font-size:14px;font-weight:700}
+.disc-log{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+.disc-log th{text-align:left;padding:7px 6px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:var(--text3);border-bottom:2px solid var(--border)}
+.disc-log td{padding:9px 6px;border-bottom:1px solid #f0f0f0;vertical-align:middle;white-space:nowrap}
+.disc-log tr:last-child td{border-bottom:none}
+.disc-log tr:hover td{background:#fffafa}
+.dl-time{font-size:15px;font-weight:900;color:var(--text)}
+.dl-src{font-size:11px;margin-left:5px}
+.dl-loc{font-size:11px;font-weight:800;color:#92600a;background:#fff8e6;border:1px solid rgba(232,184,0,.4);border-radius:6px;padding:2px 7px;display:inline-block}
+.dl-base{color:var(--text2);font-weight:700;text-align:right}
+.dl-disc{color:var(--red);font-weight:900;text-align:right}
+.dl-final{color:var(--green);font-weight:900;text-align:right}
+.dl-clickable{cursor:pointer}
+.dl-clickable:active td{background:#fff4f4}
+.dl-arrow{display:inline-block;color:var(--text3);font-size:11px;margin-right:3px}
+.dl-detail td{padding:0 6px 10px;background:#fafafa}
+.dl-items{background:#fff;border:1px solid var(--border);border-radius:10px;padding:2px 10px;margin-top:2px}
+.dl-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f4f4f4;font-size:13px;white-space:normal}
+.dl-item:last-child{border-bottom:none}
+.dl-item-name{font-weight:700;color:var(--text)}
+.dl-item-qty{font-weight:900;color:var(--text2);font-size:12px}
+.dl-item-right{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.dl-item-was{color:var(--text3);text-decoration:line-through;font-size:12px;font-weight:700}
+.dl-item-pct{color:var(--red);font-weight:900;font-size:12px}
+.dl-item-final{color:var(--text);font-weight:900}
 
 /* Легенда */
 .legend{display:flex;gap:12px;margin-bottom:12px;font-size:12px;font-weight:700}
@@ -432,6 +512,52 @@ body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <?php if (!empty($discountLog)): ?>
+    <div class="sec-title" style="margin-top:18px">🏷️ Отстъпки по час<?= $locationId === 0 ? ' и магазин' : '' ?></div>
+    <table class="disc-log">
+      <thead>
+        <tr>
+          <th>Час</th>
+          <?php if ($locationId === 0): ?><th>Магазин</th><?php endif; ?>
+          <th style="text-align:right">Без отст.</th>
+          <th style="text-align:right">Отстъпка</th>
+          <th style="text-align:right">Взето</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php $dlCols = $locationId === 0 ? 5 : 4; ?>
+        <?php foreach ($discountLog as $i => $d): ?>
+          <?php $hasIt = !empty($d['items']); ?>
+          <tr class="dl-main<?= $hasIt ? ' dl-clickable' : '' ?>"<?= $hasIt ? ' onclick="dlToggle('.$i.')"' : '' ?>>
+            <td class="dl-time"><?php if ($hasIt): ?><span class="dl-arrow" id="dlarr<?= $i ?>">▸</span><?php endif; ?><?= h($d['time']) ?><span class="dl-src"><?= $d['source']==='scan' ? '💳' : '🧮' ?></span></td>
+            <?php if ($locationId === 0): ?><td><span class="dl-loc"><?= h($d['loc']) ?></span></td><?php endif; ?>
+            <td class="dl-base"><?= number_format($d['gross'], 2, '.', '') ?> €</td>
+            <td class="dl-disc">−<?= number_format($d['disc'], 2, '.', '') ?> € (<?= (int)$d['pct'] ?>%)</td>
+            <td class="dl-final"><?= number_format($d['final'], 2, '.', '') ?> €</td>
+          </tr>
+          <?php if ($hasIt): ?>
+          <tr class="dl-detail" id="dldet<?= $i ?>" style="display:none">
+            <td colspan="<?= $dlCols ?>">
+              <div class="dl-items">
+                <?php foreach ($d['items'] as $it): ?>
+                  <?php $nm = trim(($it['code'] ?: '—').($it['brand'] ? ' · '.$it['brand'] : '')); $bs = round($it['qty'] * $it['price'], 2); $id = (int)$it['disc']; ?>
+                  <div class="dl-item">
+                    <span class="dl-item-name"><?= h($nm) ?> <span class="dl-item-qty">× <?= (int)$it['qty'] ?></span></span>
+                    <span class="dl-item-right">
+                      <?php if ($id > 0): ?><span class="dl-item-was"><?= number_format($bs, 2, '.', '') ?></span><span class="dl-item-pct">−<?= $id ?>%</span><?php endif; ?>
+                      <span class="dl-item-final"><?= number_format($it['final'], 2, '.', '') ?> €</span>
+                    </span>
+                  </div>
+                <?php endforeach; ?>
+              </div>
+            </td>
+          </tr>
+          <?php endif; ?>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    <?php endif; ?>
+
   <?php endif; ?>
 </div>
 
@@ -448,6 +574,14 @@ body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--tex
 </div><!-- /wrap -->
 
 <script>
+function dlToggle(i){
+  const det=document.getElementById('dldet'+i), arr=document.getElementById('dlarr'+i);
+  if(!det) return;
+  const open=det.style.display!=='none';
+  det.style.display=open?'none':'';
+  if(arr) arr.textContent=open?'▸':'▾';
+}
+
 // Часовник
 function tick(){
   const el=document.getElementById('clock');

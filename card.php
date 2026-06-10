@@ -87,9 +87,13 @@ function findCustomerByCard(PDO $pdo, string $cardNumber): ?array {
 }
 
 function loadUnusedVouchers(PDO $pdo, int $customerId): array {
+    /* FIX_CARD_VOUCHER_MAPPING_v1 — пълен филтър + source + amount */
     $stmt = $pdo->prepare("
-        SELECT id, code, voucher_type, percent_value, min_spent, used, created_at
-        FROM vouchers WHERE customer_id = :customer_id AND used = 0
+        SELECT id, code, voucher_type, percent_value, amount, min_spent, used, status, source, expires_at, created_at
+        FROM vouchers WHERE customer_id = :customer_id
+          AND (used IS NULL OR used = 0)
+          AND (status IS NULL OR status = 'active')
+          AND (expires_at IS NULL OR expires_at > NOW())
         ORDER BY created_at ASC, id ASC
     ");
     $stmt->execute(['customer_id' => $customerId]);
@@ -97,28 +101,46 @@ function loadUnusedVouchers(PDO $pdo, int $customerId): array {
 }
 
 function detectVoucherKind(array $v): string {
-    $code  = strtoupper(trim((string)($v['code'] ?? '')));
-    $type  = strtolower(trim((string)($v['voucher_type'] ?? '')));
-    $value = (float)($v['percent_value'] ?? 0);
+    /* FIX_CARD_VOUCHER_MAPPING_v1 — чете source + amount правилно */
+    $code   = strtoupper(trim((string)($v['code'] ?? '')));
+    $type   = strtolower(trim((string)($v['voucher_type'] ?? '')));
+    $source = strtolower(trim((string)($v['source'] ?? '')));
+    $pct    = (float)($v['percent_value'] ?? 0);
+    $amt    = (float)($v['amount'] ?? 0);
 
+    /* 1) Source колона — най-надеждна */
+    if ($source === 'welcome')   return 'welcome5';
+    if ($source === 'birthday')  return 'birthday20';
+    if ($source === 'turnover')  return 'turnover5';
+    if ($source === 'milestone') {
+        if ($amt >= 149.99 || $amt >= 100) return 'fixed150';
+        if ($amt >= 49.99  || $amt >= 50)  return 'fixed50';
+        if ($amt >= 4.99   || $amt >= 5)   return 'fixed5';
+    }
+
+    /* 2) Code prefix — fallback */
     if (strpos($code, 'WELCOME5') === 0) return 'welcome5';
+    if (strpos($code, 'BD-')      === 0) return 'birthday20';
     if (strpos($code, 'PCT5')     === 0) return 'turnover5';
     if (strpos($code, 'EUR150')   === 0) return 'fixed150';
     if (strpos($code, 'EUR50')    === 0) return 'fixed50';
     if (strpos($code, 'EUR5')     === 0) return 'fixed5';
-    if ($type === 'welcome') return 'welcome5';
-    if ($type === 'percent' && abs($value - 5) < 0.001) return 'turnover5';
+
+    /* 3) Type+value — последна линия защита */
+    if ($type === 'percent' && abs($pct - 20) < 0.001) return 'birthday20';
+    if ($type === 'percent' && abs($pct - 5)  < 0.001) return 'welcome5';
     if ($type === 'fixed') {
-        if ($value >= 149.99) return 'fixed150';
-        if ($value >= 49.99)  return 'fixed50';
-        if ($value >= 4.99)   return 'fixed5';
+        if ($amt >= 149.99) return 'fixed150';
+        if ($amt >= 49.99)  return 'fixed50';
+        if ($amt >= 4.99)   return 'fixed5';
     }
     return 'unknown';
 }
 
 function voucherMeta(string $kind): ?array {
     switch ($kind) {
-        case 'welcome5':  return ['key'=>'welcome',   'title'=>'Welcome -5%','label'=>'Welcome -5%','badge'=>'-5%', 'desc'=>'Еднократен бонус за първата покупка.',                           'type_group'=>'welcome',     'sort'=>10];
+        case 'welcome5':   return ['key'=>'welcome',   'title'=>'Welcome -5%', 'label'=>'Welcome -5%', 'badge'=>'-5%', 'desc'=>'Еднократен бонус за първата покупка.',                            'type_group'=>'welcome',     'sort'=>10];
+        case 'birthday20': return ['key'=>'birthday',  'title'=>'Рожден ден -20%','label'=>'Рожден ден -20%','badge'=>'-20%','desc'=>'Подарък за рождения ден — валиден 14 дни (7 преди + 7 след).',     'type_group'=>'welcome',     'sort'=>15]; /* FIX_CARD_VOUCHER_MAPPING_v1 */
         case 'turnover5': return ['key'=>'pct5',      'title'=>'5% бонус',   'label'=>'5% бонус',   'badge'=>'-5%', 'desc'=>'Активен 5% бонус след достигнат оборотен цикъл 100€.',            'type_group'=>'accumulated', 'sort'=>20];
         case 'fixed5':    return ['key'=>'reward_5',  'title'=>'5€ ваучер',  'label'=>'5€ ваучер',  'badge'=>'-5€', 'desc'=>'Награда за 10 покупки. Условие: всяка покупка трябва да е минимум 10€.',              'type_group'=>'accumulated', 'sort'=>30];
         case 'fixed50':   return ['key'=>'reward_50', 'title'=>'50€ ваучер', 'label'=>'50€ ваучер', 'badge'=>'-50€','desc'=>'Награда за 50 покупки. Условие: всяка покупка трябва да е минимум 10€.',             'type_group'=>'accumulated', 'sort'=>40];
@@ -128,16 +150,18 @@ function voucherMeta(string $kind): ?array {
 }
 
 function buildActiveBonuses(array $customer, array $vouchers): array {
+    /* FIX_CARD_VOUCHER_MAPPING_v1 — welcome се показва ако е активен реално, не само за нови клиенти */
     $items = []; $seen = [];
-    if ((int)$customer['total_purchases'] === 0) {
-        $w = voucherMeta('welcome5'); $items[] = $w; $seen[$w['key']] = true;
-    }
     foreach ($vouchers as $v) {
         $kind = detectVoucherKind($v);
-        if ($kind === 'welcome5') continue;
         $norm = voucherMeta($kind);
         if (!$norm || isset($seen[$norm['key']])) continue;
         $seen[$norm['key']] = true; $items[] = $norm;
+    }
+    /* Ако нямa welcome ваучер още, но е нов клиент — показваме като "потенциален" */
+    if ((int)$customer['total_purchases'] === 0 && !isset($seen['welcome'])) {
+        $w = voucherMeta('welcome5');
+        if ($w) { $items[] = $w; }
     }
     usort($items, fn($a,$b) => ($a['sort']??999)<=>($b['sort']??999));
     return array_values($items);

@@ -34,9 +34,9 @@ try {
     $stmt = $pdo->prepare(
         'SELECT brand, price, use_count, last_seen
            FROM item_variants
-          WHERE code = :code
-          ORDER BY use_count DESC, last_seen DESC
-          LIMIT 10'
+          WHERE code = :code AND hidden = 0 /* VARIANT_HIDE_v1 */
+          ORDER BY use_count DESC, (brand IS NULL OR brand = \'\') ASC, last_seen DESC
+          LIMIT 10 /* FIX_LOOKUP_BRAND_FIRST_v3 */'
     );
     $stmt->execute([':code' => $code]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);

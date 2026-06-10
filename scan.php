@@ -1059,6 +1059,12 @@ body::after{
 }
 .client-name{font-size:18px;font-weight:900;color:var(--text)}
 .client-card{font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-top:2px}
+.client-card-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.6px;color:#E8B800;margin-bottom:4px}
+.client-card-badge::before{content:'';width:8px;height:8px;border-radius:50%;background:#E8B800;box-shadow:0 0 8px #E8B800;animation:cardDot 1.4s ease-in-out infinite}
+.client-block.has-card{padding:15px 16px;border:1.5px solid rgba(232,184,0,.55);background:linear-gradient(135deg,rgba(232,184,0,.14),rgba(232,184,0,.04));animation:cardGlow 2.2s ease-in-out infinite}
+.client-block.has-card .client-name{font-size:20px}
+@keyframes cardGlow{0%,100%{box-shadow:0 0 0 1px rgba(232,184,0,.25),0 0 14px rgba(232,184,0,.18),inset 0 1px 0 rgba(255,255,255,.05)}50%{box-shadow:0 0 0 1px rgba(232,184,0,.6),0 0 26px rgba(232,184,0,.45),inset 0 1px 0 rgba(255,255,255,.08)}}
+@keyframes cardDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
 .client-bonus{
   font-size:13px;font-weight:900;padding:6px 13px;
   border-radius:999px;
@@ -1119,6 +1125,9 @@ body::after{
 }
 .item-preview-right{font-weight:900;color:var(--text);white-space:nowrap}
 .item-preview-disc{font-size:11px;color:var(--red);font-weight:800;margin-left:5px}
+.ip-tot-row{display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding:5px 0;color:var(--text2)}
+.ip-tot-row:first-child{border-top:1px solid rgba(99,102,241,.18);margin-top:8px;padding-top:9px}
+.ip-tot-row.disc{color:var(--red)}
 
 /* ── За плащане (hero block) ── */
 .pay-block{
@@ -1774,6 +1783,7 @@ body::after{
   <div class="items-preview hidden" id="itemsPreview">
     <div class="items-preview-title">📦 Артикули в покупката</div>
     <div id="itemsPreviewBody"></div>
+    <div id="itemsPreviewTotals"></div>
   </div>
 
   <!-- За плащане -->
@@ -2122,10 +2132,11 @@ function renderClientBlock(data){
     ? `<div class="client-bonus">${esc(bonus[0])}</div>`
     : '';
   document.getElementById('clientBlock').innerHTML = `
-    <div class="client-block">
+    <div class="client-block has-card">
       <div>
+        <div class="client-card-badge">💳 Лоялна карта</div>
         <div class="client-name">${esc(data.customer_name)}</div>
-        <div class="client-card">${esc(data.card_number)}</div>
+        <div class="client-card">№ ${esc(data.card_number)}</div>
       </div>
       ${bonusHtml}
     </div>`;
@@ -2157,6 +2168,7 @@ function renderPayBlock(data){
     elLoy.classList.add('hidden');
   }
 
+  renderItemsTotals(data.paid_amount);
   submitBtn.disabled = !document.getElementById('card_number').value.trim();
 }
 
@@ -2402,6 +2414,21 @@ function renderItemsPreview(){
       </span>
     </div>`;
   }).join('');
+  renderItemsTotals();
+}
+
+function renderItemsTotals(paid){
+  const wrap = document.getElementById('itemsPreviewTotals');
+  if(!wrap) return;
+  const gross = parseFloat(document.getElementById('fGross').value || 0);
+  const net   = parseFloat(document.getElementById('fNet').value   || 0);
+  if(gross <= 0){ wrap.innerHTML=''; return; }
+  const pay     = (paid===undefined||paid===null||paid==='') ? net : parseFloat(paid);
+  const totDisc = Math.max(0, gross - pay);
+  const pct     = gross>0 ? Math.round((totDisc/gross)*100) : 0;
+  let rows = `<div class="ip-tot-row"><span>Общо без отстъпка</span><span>${gross.toFixed(2)} лв</span></div>`;
+  if(totDisc>0) rows += `<div class="ip-tot-row disc"><span>Обща отстъпка</span><span>−${totDisc.toFixed(2)} лв (${pct}%)</span></div>`;
+  wrap.innerHTML = rows;
 }
 
 /* ══════════════════════════════════════════════════════

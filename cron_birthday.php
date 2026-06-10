@@ -159,7 +159,11 @@ function sendBirthdayPush(PDO $pdo, int $customer_id, string $name): int {
     foreach ($helpers as $h) {
         if (file_exists($h)) {
             require_once $h;
-            if (function_exists('sendPushToCustomer')) {
+            /* PUSH_INTEGRATION_v1 — use real sendPush from push_helper */
+            if (function_exists('sendPush')) {
+                global $pdo;
+                $r = sendPush($pdo, $customer_id, $title, $body, 'auto', 'birthday', $url);
+            } else if (function_exists('sendPushToCustomer')) {
                 $r = sendPushToCustomer($customer_id, $title, $body, $url);
                 return is_int($r) ? $r : ($r ? 1 : 0);
             }

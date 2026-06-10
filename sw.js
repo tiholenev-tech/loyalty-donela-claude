@@ -1,53 +1,24 @@
-/* sw.js — Service Worker за Ени Тихолов */
-
-/* ── Инсталация ── */
+/* sw.js — KILL SWITCH (S20.05.2026)
+ * Force unregister на всички стари service workers
+ * след recovery от компрометиран droplet
+ */
 self.addEventListener('install', event => {
   self.skipWaiting();
 });
 
-/* ── Активация ── */
 self.addEventListener('activate', event => {
-  event.waitUntil(self.clients.claim());
-});
-
-/* ── Push нотификации ── */
-self.addEventListener('push', event => {
-  let data = {};
-  try {
-    data = event.data ? event.data.json() : {};
-  } catch(e) {
-    data = { title: 'Ени Тихолов', body: event.data ? event.data.text() : 'Ново съобщение' };
-  }
-  const title = data.title || 'Ени Тихолов';
-  const options = {
-    body:    data.body  || '',
-    icon:    data.icon  || '/loyalty/icon-192.png',
-    badge:   data.badge || '/loyalty/icon-192.png',
-    tag:     'eni-loyalty-push',
-    renotify: true,
-    vibrate: [200, 100, 200],
-    data: { url: data.url || '/loyalty/' },
-    actions: [
-      { action: 'open',    title: 'Отвори картата' },
-      { action: 'dismiss', title: 'Затвори' },
-    ],
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
-});
-
-/* ── Клик върху нотификацията ── */
-self.addEventListener('notificationclick', event => {
-  event.notification.close();
-  if (event.action === 'dismiss') return;
-  const url = event.notification.data?.url || '/loyalty/';
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-      for (const client of clientList) {
-        if (client.url.includes('/loyalty/') && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) return clients.openWindow(url);
-    })
+    (async () => {
+      // 1. Изтрий всички cache-ове
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+      
+      // 2. Unregister себе си
+      await self.registration.unregister();
+      
+      // 3. Force reload на всички tabs
+      const clients = await self.clients.matchAll();
+      clients.forEach(client => client.navigate(client.url));
+    })()
   );
 });
