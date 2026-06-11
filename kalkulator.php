@@ -1286,6 +1286,8 @@ body::before{
 }
 .fs-search-clear.show{display:block}
 .fs-hit{background:rgba(232,184,0,.16);border-radius:8px;padding:0 4px}
+.fs-item-del{flex-shrink:0;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(239,68,68,.3);border-radius:8px;background:rgba(239,68,68,.1);color:var(--red);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.fs-item-del:active{background:rgba(239,68,68,.22)}
 .fs-body{flex:1;overflow-y:auto;position:relative;z-index:1;padding:16px 14px 30px}
 .fs-footer{flex-shrink:0;padding:12px 14px;background:var(--surface);border-top:1px solid var(--border);backdrop-filter:blur(20px)}
 .fs-back-btn{
@@ -3139,12 +3141,13 @@ function renderFullscreen(){
             <button onclick="deleteSale(${sale.id})" style="border:none;background:rgba(239,68,68,.1);color:var(--red);border-radius:7px;padding:4px 10px;font-size:12px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center;gap:4px"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg><span>Изтрий</span></button>
           </div>
         </div>`;
-      sale.items.forEach(it => {
+      sale.items.forEach((it, idx) => {
         const name = [it.code, it.brand].filter(Boolean).join(' · ');
         const hit = fsQ && fsMatch(it.code, it.brand, it.price, fsQ);
-        html += `<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">
-          <span style="font-weight:700;color:var(--text2)"${hit?' class="fs-hit"':''}>${esc(name)}</span>
-          <span style="font-weight:900">×${it.qty} · ${parseFloat(it.price).toFixed(2)} €${it.disc>0?' (−'+it.disc+'%)':''}</span>
+        html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;padding:3px 0">
+          <span style="flex:1;min-width:0;font-weight:700;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"${hit?' class="fs-hit"':''}>${esc(name)}</span>
+          <span style="font-weight:900;white-space:nowrap">×${it.qty} · ${parseFloat(it.price).toFixed(2)} €${it.disc>0?' (−'+it.disc+'%)':''}</span>
+          <button class="fs-item-del" onclick="deleteSaleItem(${sale.id}, ${idx})" title="Изтрий този артикул" aria-label="Изтрий"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>`;
       });
       html += '</div>';
@@ -3176,6 +3179,44 @@ window.deleteSale = async function(id) {
       const fs = document.getElementById('fsOverlay');
       if (fs && !fs.classList.contains('hidden')) renderFullscreen();
     } else alert('Грешка: ' + (data.error||'?'));
+  } catch(e) { alert('Грешка: ' + e.message); }
+};
+
+/* ══ Изтрий ЕДИН артикул от продажба (поправка на сбъркано въвеждане) ══ */
+window.deleteSaleItem = async function(saleId, idx) {
+  if (!_histData || !_histData.sales) return;
+  const sale = _histData.sales.find(s => s.id === saleId);
+  if (!sale || !sale.items || !sale.items[idx]) return;
+  const it = sale.items[idx];
+  const nm = ([it.code, it.brand].filter(Boolean).join(' · ')) || 'артикул';
+
+  if (sale.items.length === 1) {
+    /* последният артикул → изтриваме цялата продажба */
+    if (!confirm('„'+nm+'" е единственият артикул в продажбата ('+sale.time+').\nЦялата продажба ще се изтрие. Сигурен ли си?')) return;
+    return window.deleteSale(saleId);
+  }
+  if (!confirm('Да изтрия „'+nm+' ×'+it.qty+'" от продажбата в '+sale.time+'?')) return;
+
+  const remaining = sale.items.filter((_, i) => i !== idx);
+  const delBase   = Math.round((it.qty * it.price) * 100) / 100;
+  const newFinal  = Math.round((sale.final - it.final) * 100) / 100;
+  const newGross  = Math.round((sale.gross - delBase) * 100) / 100;
+  const newDisc   = Math.round((newGross - newFinal) * 100) / 100;
+  const items = remaining.map(r => ({
+    code: r.code, brand: r.brand, qty: r.qty, price: r.price, disc: r.disc || 0,
+    base: Math.round((r.qty * r.price) * 100) / 100, final: r.final
+  }));
+
+  try {
+    const url = new URL(PAGE_URL);
+    url.searchParams.set('ajax','update_sale');
+    const res  = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: saleId, items, gross: newGross, final: newFinal, discount: newDisc })});
+    const data = await res.json();
+    if (!data.ok) { alert('Грешка: ' + (data.error||'?')); return; }
+    await loadHistory();
+    const fs = document.getElementById('fsOverlay');
+    if (fs && !fs.classList.contains('hidden')) renderFullscreen();
   } catch(e) { alert('Грешка: ' + e.message); }
 };
 
