@@ -704,28 +704,33 @@ body::before{
   display:flex;align-items:center;justify-content:space-between;
   box-shadow:0 4px 24px rgba(99,102,241,.15);
 }
-/* ── Лепкава лента за чакаща продажба ── */
-.pending-bar{
+/* ── Живо прозорче: текущо набираният артикул ── */
+.live-bar{
   display:none;align-items:center;justify-content:space-between;gap:10px;
-  padding:9px 14px;
-  background:linear-gradient(135deg,#16a34a,#22c55e);
-  color:#fff;
-  border-bottom:1px solid rgba(0,0,0,.1);
-  box-shadow:0 6px 18px rgba(34,197,94,.35);
+  padding:8px 14px;
+  background:linear-gradient(135deg,rgba(99,102,241,.22),rgba(129,140,248,.12));
+  border-bottom:1px solid var(--border2);
+  box-shadow:0 6px 18px rgba(99,102,241,.25);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  transition:background .25s;
 }
-.pending-bar.show{display:flex}
-.pb-info{display:flex;align-items:center;gap:10px;min-width:0}
-.pb-badge{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;background:rgba(255,255,255,.22);padding:4px 9px;border-radius:999px}
-.pb-total{font-size:19px;font-weight:900;font-variant-numeric:tabular-nums;white-space:nowrap}
-.pb-btn{
-  flex-shrink:0;border:none;border-radius:11px;
-  background:rgba(255,255,255,.96);color:#15803d;
-  font:900 14px/1 'Montserrat',sans-serif;
-  padding:11px 18px;cursor:pointer;
-  display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
-  box-shadow:0 3px 10px rgba(0,0,0,.18);
+.live-bar.show{display:flex}
+.live-bar.added{
+  background:linear-gradient(135deg,rgba(34,197,94,.28),rgba(34,197,94,.12));
+  box-shadow:0 6px 18px rgba(34,197,94,.3);
 }
-.pb-btn:active{transform:translateY(1px)}
+.live-left{min-width:0;flex:1}
+.live-main{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:900;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-dot{flex-shrink:0;width:8px;height:8px;border-radius:50%;background:#22c55e;animation:livePulse 1.4s infinite}
+@keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+.live-name{overflow:hidden;text-overflow:ellipsis}
+.live-sub{font-size:13px;font-weight:800;color:var(--text2);margin-top:1px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-sub b{color:var(--text)}
+.live-disc{color:var(--red)}
+.live-idle{font-size:13px;font-weight:800;color:var(--text3)}
+.live-added-txt{font-size:16px;font-weight:900;color:#16a34a}
+.live-cart{display:none;flex-shrink:0;align-items:center;gap:5px;background:rgba(99,102,241,.18);border:1px solid var(--border2);border-radius:999px;padding:5px 11px;font-size:13px;font-weight:900;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums}
+.live-cart.show{display:inline-flex}
 .topbar-left{font-size:15px;font-weight:900;color:var(--text);letter-spacing:.2px}
 .topbar-right{
   font-size:16px;font-weight:900;color:#fff;
@@ -1758,15 +1763,16 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
   </button>
   <div class="topbar-right" id="hTotal">0.00 €</div>
 </div>
-<!-- Лепкава лента: чакаща (незаписана) продажба -->
-<div class="pending-bar" id="pendingBar">
-  <div class="pb-info">
-    <span class="pb-badge"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg> <span id="pbCount">0</span></span>
-    <span class="pb-total" id="pbTotal">0.00 €</span>
+<!-- Живо прозорче: какво се набира в момента -->
+<div class="live-bar" id="liveBar">
+  <div class="live-left">
+    <div class="live-main" id="liveMain"></div>
+    <div class="live-sub" id="liveSub"></div>
   </div>
-  <button type="button" class="pb-btn" id="pbBtn" onclick="pendingSave()">
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши</span>
-  </button>
+  <div class="live-cart" id="liveCart">
+    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+    <span id="liveCartCount">0</span> · <span id="liveCartTotal">0.00 €</span>
+  </div>
 </div>
 </div><!-- /sticky-head -->
 
@@ -2040,6 +2046,7 @@ function syncQty(){
   document.querySelectorAll('.qty-b').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.q)===selQty && !qtyCustom.value);
   });
+  if(typeof updateStickyLive === 'function') updateStickyLive();
 }
 
 /* ── Отстъпка ── */
@@ -2065,6 +2072,7 @@ function syncDisc(){
     if(!preset && selDisc > 0){ dc.value = selDisc; }
     else if(selDisc === 0 || preset){ dc.value = ''; }
   }
+  if(typeof updateStickyLive === 'function') updateStickyLive();
 }
 /* Custom отстъпка */
 const discCustomEl = document.getElementById('discCustom');
@@ -2546,19 +2554,23 @@ codeInput.addEventListener('input', () => {
     }
     hideVariantPicker();
     if(_lookupTimer) clearTimeout(_lookupTimer);
+    if(typeof updateStickyLive === 'function') updateStickyLive();
     return;
   }
   if(_lookupTimer) clearTimeout(_lookupTimer);
   _lookupTimer = setTimeout(() => autoFillFromCode(codeInput.value), 800);
+  if(typeof updateStickyLive === 'function') updateStickyLive();
 });
 
 /* S9.MANUAL: при ръчна промяна на цена/марка → маркер че не е auto-fill */
 priceInput.addEventListener('input', () => {
   if(priceInput.dataset.autofilled === '1') delete priceInput.dataset.autofilled;
+  if(typeof updateStickyLive === 'function') updateStickyLive();
 });
 if(brandSelect){
   brandSelect.addEventListener('change', () => {
     if(brandSelect.dataset.autofilled === '1') delete brandSelect.dataset.autofilled;
+    if(typeof updateStickyLive === 'function') updateStickyLive();
   });
 }
 
@@ -2593,6 +2605,7 @@ function addItem(){
   qtyCustom.value=''; brandSelect.value=''; brandSelect.classList.remove('chosen');
   syncQty(); syncDisc();
   render(); updateTotals();
+  if(typeof updateStickyLive === 'function') updateStickyLive(code); /* мигни „Добавено: <код>" */
   document.getElementById('saveResult').style.display = 'none';
 
   // FIX: Прибери клавиатурата (blur всички inputs)
@@ -2630,7 +2643,7 @@ function render(){
   const hasNormal  = items.some(i => i.qty > 0);
   saveBtn.disabled = items.length === 0;
   if(saveBtnTop) saveBtnTop.disabled = items.length === 0;
-  updatePendingBar();
+  updateStickyLive();
   if(hasReturns && !hasNormal) saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg><span>Запиши връщането</span>';
   else if(hasReturns && hasNormal) saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши (смесено)</span>';
   else saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши продажбата</span>';
@@ -2660,29 +2673,69 @@ function render(){
 }
 window.delItem = id => { items=items.filter(i=>i.id!==id); render(); updateTotals(); };
 
-/* ── Лепкава лента: чакаща (незаписана) продажба ── */
-function updatePendingBar(){
-  const bar = document.getElementById('pendingBar');
+/* ── Живо прозорче: показва текущо набирания артикул + малък индикатор за кошницата ── */
+let _liveFlashTimer = null;
+function updateStickyLive(flashCode){
+  const bar = document.getElementById('liveBar');
   if(!bar) return;
+  const mainEl = document.getElementById('liveMain');
+  const subEl  = document.getElementById('liveSub');
+  const cartEl = document.getElementById('liveCart');
+
+  /* малък индикатор за кошницата (брой + текуща сума) */
   const n = items.length;
-  if(!n){ bar.classList.remove('show'); return; }
-  bar.classList.add('show');
-  const cntEl = document.getElementById('pbCount');
-  const totEl = document.getElementById('pbTotal');
-  const htEl  = document.getElementById('hTotal');
-  if(cntEl) cntEl.textContent = n;
-  if(totEl && htEl) totEl.textContent = htEl.textContent;
-  const hasReturns = items.some(i=>i.qty<0);
-  const hasNormal  = items.some(i=>i.qty>0);
-  const lbl = document.querySelector('#pbBtn span');
-  if(lbl) lbl.textContent = (hasReturns && !hasNormal) ? 'Запиши връщане' : 'Запиши';
+  if(cartEl){
+    if(n > 0){
+      cartEl.classList.add('show');
+      const cc = document.getElementById('liveCartCount');
+      const ct = document.getElementById('liveCartTotal');
+      const ht = document.getElementById('hTotal');
+      if(cc) cc.textContent = n;
+      if(ct && ht) ct.textContent = ht.textContent;
+    } else {
+      cartEl.classList.remove('show');
+    }
+  }
+
+  /* кратко мигване „Добавено" след натискане на Добави */
+  if(flashCode){
+    bar.classList.add('show','added');
+    if(mainEl) mainEl.innerHTML = '<span class="live-added-txt">✓ Добавено: '+esc(flashCode)+'</span>';
+    if(subEl)  subEl.textContent = '';
+    if(_liveFlashTimer) clearTimeout(_liveFlashTimer);
+    _liveFlashTimer = setTimeout(() => { _liveFlashTimer = null; updateStickyLive(); }, 1200);
+    return;
+  }
+
+  const code  = (codeInput && codeInput.value || '').trim();
+  const brand = (brandSelect && brandSelect.value || '').trim();
+  const price = parseFloat(priceInput && priceInput.value || 0) || 0;
+  const hasEntry = code !== '' || price > 0;
+
+  /* ако има реален вход, прекъсваме евентуален стар flash таймер */
+  if(hasEntry && _liveFlashTimer){ clearTimeout(_liveFlashTimer); _liveFlashTimer = null; }
+  if(_liveFlashTimer) return; /* още мига „Добавено" — не пипай главния ред */
+
+  bar.classList.remove('added');
+
+  if(hasEntry){
+    const qty  = selQty || 1;
+    const line = Math.round(qty * price * (1 - (selDisc||0)/100) * 100) / 100;
+    const name = [code||'—', brand].filter(Boolean).join(' · ');
+    if(mainEl) mainEl.innerHTML = '<span class="live-dot"></span><span class="live-name">'+esc(name)+'</span>';
+    const parts = ['× '+qty, price.toFixed(2)+' €'];
+    if(selDisc>0) parts.push('<span class="live-disc">−'+selDisc+'%</span>');
+    if(subEl) subEl.innerHTML = parts.join(' · ') + (price>0 ? ' <b>= '+line.toFixed(2)+' €</b>' : '');
+    bar.classList.add('show');
+  } else if(n > 0){
+    if(mainEl) mainEl.innerHTML = '<span class="live-idle">Набери следващ артикул…</span>';
+    if(subEl)  subEl.textContent = '';
+    bar.classList.add('show');
+  } else {
+    bar.classList.remove('show');
+  }
 }
-function pendingSave(){
-  if(!items.length) return;
-  /* Бутонът #saveBtn е скрит със CSS, но click-handler-ът пази цялата логика по записа */
-  if(saveBtn && !saveBtn.disabled) saveBtn.click();
-}
-window.pendingSave = pendingSave;
+window.updateStickyLive = updateStickyLive;
 
 /* ── Тоталне — FIX_VOUCHER_AUTO_APPLY_v1 ── */
 let voucherAppliedAmount = 0; /* колко € е свалил ваучерът (за save handler) */
@@ -2792,7 +2845,7 @@ function updateTotals(){
     }
   } catch(e) {}
 
-  try { updatePendingBar(); } catch(e){}
+  try { updateStickyLive(); } catch(e){}
 }
 
 /* ── Запиши продажба ── */
