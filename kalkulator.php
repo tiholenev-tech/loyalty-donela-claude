@@ -545,6 +545,45 @@ if ($ajax === 'update_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+/* ══════════════════════════════════════════════════════
+   AJAX: Класация — лоялни карти по магазин за месеца (награда 50€)
+   ══════════════════════════════════════════════════════ */
+if ($ajax === 'cards_leaderboard') {
+    try {
+        $tz   = new DateTimeZone('Europe/Sofia');
+        $now  = new DateTime('now', $tz);
+        $from = $now->format('Y-m-01 00:00:00');
+        $to   = $now->format('Y-m-t 23:59:59');
+
+        $rows = [];
+        try {
+            $rs = $pdo->prepare("SELECT COALESCE(NULLIF(reg_location_name,''),'— без магазин —') loc,
+                                        reg_location_id rid, COUNT(*) cnt
+                FROM customers
+                WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to
+                GROUP BY reg_location_id, reg_location_name
+                ORDER BY cnt DESC, loc ASC");
+            $rs->execute(['from'=>$from, 'to'=>$to]);
+            $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $rows = []; }
+
+        $total = 0;
+        foreach ($rows as $r) $total += (int)$r['cnt'];
+
+        jsonOut([
+            'ok'          => true,
+            'rows'        => $rows,
+            'total'       => $total,
+            'month_label' => $now->format('m.Y'),
+            'my_loc_id'   => $locationId,
+            'my_loc_name' => $locationName,
+            'prize'       => 50,
+        ]);
+    } catch (Throwable $e) {
+        jsonOut(['ok'=>false, 'error'=>$e->getMessage()]);
+    }
+}
+
 /* ── Текущ бизнес ден за JS ── */
 $currentBizDate = businessDate();
 
@@ -1165,6 +1204,44 @@ body::before{
   background:linear-gradient(135deg,var(--accent),var(--accent-light));
   border-color:transparent;color:#fff;box-shadow:0 4px 14px var(--accent-glow);
 }
+
+/* ═══ КЛАСАЦИЯ — лоялни карти (награда 50€) ═══ */
+.lb-block{
+  background:var(--surface);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:10px;
+}
+.lb-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.lb-title{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:900;color:var(--text)}
+.lb-title svg{color:var(--gold)}
+.lb-refresh{flex-shrink:0;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border2);border-radius:9px;background:rgba(99,102,241,.08);color:var(--text2);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.lb-refresh:active{background:rgba(99,102,241,.2)}
+.lb-prize{
+  display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:9px 11px;
+  background:linear-gradient(135deg,rgba(232,184,0,.18),rgba(232,184,0,.05));
+  border:1px solid rgba(232,184,0,.4);border-radius:11px;
+  font-size:12px;font-weight:800;color:#fde68a;line-height:1.35;
+}
+.lb-prize svg{flex-shrink:0;color:var(--gold)}
+.lb-prize b{color:#fff;font-size:15px}
+.lb-list{display:flex;flex-direction:column;gap:6px}
+.lb-empty{text-align:center;padding:16px;color:var(--text3);font-size:13px;font-weight:700}
+.lb-row{
+  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:11px;
+  background:rgba(99,102,241,.05);border:1px solid var(--border);
+}
+.lb-row.lb-leader{
+  background:linear-gradient(135deg,rgba(232,184,0,.16),rgba(232,184,0,.04));
+  border-color:rgba(232,184,0,.45);
+}
+.lb-row.lb-mine{box-shadow:0 0 0 2px rgba(99,102,241,.55) inset}
+.lb-rank{flex-shrink:0;width:26px;text-align:center;font-size:16px;font-weight:900;color:var(--text2)}
+.lb-name{flex:1;min-width:0;font-size:14px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lb-cnt{flex-shrink:0;font-size:17px;font-weight:900;color:var(--text);font-variant-numeric:tabular-nums}
+.lb-cnt small{font-size:10px;font-weight:800;color:var(--text3);margin-left:2px}
+.lb-tag{flex-shrink:0;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:rgba(99,102,241,.3);color:#c7d2fe}
+.lb-win{flex-shrink:0;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:linear-gradient(135deg,#E8B800,#f59e0b);color:#1a1205}
+.lb-foot{margin-top:11px;padding-top:10px;border-top:1px solid var(--border2);font-size:12.5px;font-weight:800;color:var(--text2);text-align:center;line-height:1.4}
+.lb-foot b{color:var(--gold)}
 
 /* ═══ SAVE BUTTON ═══ */
 .save-btn{
@@ -1921,20 +1998,23 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
     <div class="change-note" id="changeNote"></div>
   </div>
 
-  <!-- ⏹ СЕКЦИЯ 6: PAYMENT METHOD -->
-  <div class="pm-block">
-    <div class="pm-label"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> <span>Начин на плащане</span></div>
-    <div class="pm-grid">
-      <button type="button" class="pm-btn active" data-pm="cash" onclick="selectPm(this)">
-        <span class="pm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg></span>Кеш
-      </button>
-      <button type="button" class="pm-btn" data-pm="card" onclick="selectPm(this)">
-        <span class="pm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>Карта
-      </button>
-      <button type="button" class="pm-btn" data-pm="transfer" onclick="selectPm(this)">
-        <span class="pm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="21" x2="21" y2="21"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="5 6 12 3 19 6"/><line x1="4" y1="10" x2="4" y2="21"/><line x1="20" y1="10" x2="20" y2="21"/><line x1="8" y1="14" x2="8" y2="17"/><line x1="12" y1="14" x2="12" y2="17"/><line x1="16" y1="14" x2="16" y2="17"/></svg></span>Превод
+  <!-- ⏹ СЕКЦИЯ 6: КЛАСАЦИЯ — лоялни карти за месеца (награда 50€) -->
+  <div class="lb-block" id="lbBlock">
+    <div class="lb-head">
+      <div class="lb-title">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+        <span>Класация — лоялни карти</span>
+      </div>
+      <button type="button" class="lb-refresh" onclick="loadLeaderboard()" title="Обнови" aria-label="Обнови">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
     </div>
+    <div class="lb-prize">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
+      <span>Награда <b>50&nbsp;€</b> за магазина с най-много карти този месец</span>
+    </div>
+    <div class="lb-list" id="lbList"><div class="lb-empty">Зареждане…</div></div>
+    <div class="lb-foot" id="lbFoot"></div>
   </div>
 
   <!-- ⏹ SUBMIT -->
@@ -3173,10 +3253,63 @@ function renderFullscreen(){
   body.innerHTML = html;
 }
 
+/* ══ КЛАСАЦИЯ — лоялни карти за месеца (награда 50€) ══ */
+async function loadLeaderboard(){
+  const list = document.getElementById('lbList');
+  if(!list) return;
+  try{
+    const url = new URL(PAGE_URL);
+    url.searchParams.set('ajax','cards_leaderboard');
+    url.searchParams.set('location', LOCATION_ID);
+    url.searchParams.set('_ts', Date.now());
+    const res = await fetch(url, {cache:'no-store'});
+    const d = await res.json();
+    if(!d || !d.ok){ list.innerHTML = '<div class="lb-empty">Грешка при зареждане</div>'; return; }
+    renderLeaderboard(d);
+  }catch(e){ list.innerHTML = '<div class="lb-empty">Няма връзка</div>'; }
+}
+function renderLeaderboard(d){
+  const list = document.getElementById('lbList');
+  const foot = document.getElementById('lbFoot');
+  const rows = d.rows || [];
+  if(!rows.length){
+    list.innerHTML = '<div class="lb-empty">Още няма направени карти този месец — бъди първи! 🚀</div>';
+    if(foot) foot.textContent = '';
+    return;
+  }
+  const myName = (d.my_loc_name || LOCATION_NAME || '').trim();
+  const leader = rows[0];
+  const medals = ['🥇','🥈','🥉'];
+  list.innerHTML = rows.map((r,i)=>{
+    const mine     = myName && r.loc === myName;
+    const isLeader = i === 0 && (parseInt(r.cnt)||0) > 0;
+    const rank     = medals[i] || (i+1)+'.';
+    return `<div class="lb-row${isLeader?' lb-leader':''}${mine?' lb-mine':''}">
+      <div class="lb-rank">${rank}</div>
+      <div class="lb-name">${esc(r.loc)}${mine?'<span class="lb-tag">твоят</span>':''}${isLeader?'<span class="lb-win">печели 50€</span>':''}</div>
+      <div class="lb-cnt">${r.cnt}<small>карти</small></div>
+    </div>`;
+  }).join('');
+  if(foot){
+    const myIdx = rows.findIndex(r => myName && r.loc === myName);
+    if(myIdx === 0){
+      foot.innerHTML = '🔥 Водиш класацията — задръж 1-вото място за <b>50&nbsp;€</b>!';
+    } else if(myIdx > 0){
+      const behind = (parseInt(leader.cnt)||0) - (parseInt(rows[myIdx].cnt)||0);
+      foot.innerHTML = 'Твоят магазин е на <b>'+(myIdx+1)+'</b>-то място — на <b>'+behind+'</b> '+(behind===1?'карта':'карти')+' от водача. Дерзай! 💪';
+    } else {
+      foot.innerHTML = 'Направи първата карта този месец и влез в борбата за <b>50&nbsp;€</b>!';
+    }
+  }
+}
+window.loadLeaderboard = loadLeaderboard;
+
 /* ── Старт ── */
 syncQty(); syncDisc(); render(); updateTotals();
 loadHistory();
+loadLeaderboard();
 setInterval(()=>{ if(!histLoading) loadHistory(); }, 120000);
+setInterval(loadLeaderboard, 300000);
 setTimeout(()=>codeInput.focus(), 100);
 
 /* ══ ИЗТРИВАНЕ НА ПРОДАЖБА ══ */
