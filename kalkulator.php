@@ -694,6 +694,7 @@ body::before{
 .wrap{width:100%;max-width:520px;margin:0 auto;position:relative;z-index:2}
 
 /* ── Topbar ── */
+.sticky-head{position:sticky;top:0;z-index:50}
 .topbar{
   background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(99,102,241,.05));
   backdrop-filter:blur(20px);
@@ -701,9 +702,30 @@ body::before{
   border-bottom:1px solid var(--border);
   padding:13px 16px;
   display:flex;align-items:center;justify-content:space-between;
-  position:sticky;top:0;z-index:50;
   box-shadow:0 4px 24px rgba(99,102,241,.15);
 }
+/* ── Лепкава лента за чакаща продажба ── */
+.pending-bar{
+  display:none;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 14px;
+  background:linear-gradient(135deg,#16a34a,#22c55e);
+  color:#fff;
+  border-bottom:1px solid rgba(0,0,0,.1);
+  box-shadow:0 6px 18px rgba(34,197,94,.35);
+}
+.pending-bar.show{display:flex}
+.pb-info{display:flex;align-items:center;gap:10px;min-width:0}
+.pb-badge{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;background:rgba(255,255,255,.22);padding:4px 9px;border-radius:999px}
+.pb-total{font-size:19px;font-weight:900;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pb-btn{
+  flex-shrink:0;border:none;border-radius:11px;
+  background:rgba(255,255,255,.96);color:#15803d;
+  font:900 14px/1 'Montserrat',sans-serif;
+  padding:11px 18px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  box-shadow:0 3px 10px rgba(0,0,0,.18);
+}
+.pb-btn:active{transform:translateY(1px)}
 .topbar-left{font-size:15px;font-weight:900;color:var(--text);letter-spacing:.2px}
 .topbar-right{
   font-size:16px;font-weight:900;color:#fff;
@@ -1237,6 +1259,28 @@ body::before{
   font-family:'Montserrat',sans-serif;
 }
 .fs-close:hover{background:rgba(99,102,241,.2)}
+.fs-search-wrap{
+  flex-shrink:0;position:relative;z-index:2;
+  display:flex;align-items:center;gap:8px;
+  padding:10px 14px;background:var(--surface);
+  border-bottom:1px solid var(--border);
+}
+.fs-search-input{
+  flex:1;min-width:0;height:42px;
+  background:rgba(99,102,241,.08);border:1px solid var(--border2);
+  border-radius:11px;padding:0 14px;
+  font:800 15px 'Montserrat',sans-serif;color:var(--text);
+  outline:none;
+}
+.fs-search-input::placeholder{color:var(--text3);font-weight:700}
+.fs-search-input:focus{border-color:var(--accent-light);background:rgba(99,102,241,.14)}
+.fs-search-clear{
+  flex-shrink:0;width:42px;height:42px;border-radius:11px;
+  border:1px solid var(--border2);background:rgba(99,102,241,.1);
+  color:var(--text2);font-size:16px;font-weight:900;cursor:pointer;display:none;
+}
+.fs-search-clear.show{display:block}
+.fs-hit{background:rgba(232,184,0,.16);border-radius:8px;padding:0 4px}
 .fs-body{flex:1;overflow-y:auto;position:relative;z-index:1;padding:16px 14px 30px}
 .fs-footer{flex-shrink:0;padding:12px 14px;background:var(--surface);border-top:1px solid var(--border);backdrop-filter:blur(20px)}
 .fs-back-btn{
@@ -1702,6 +1746,7 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
 <div class="wrap">
 
 <!-- Topbar -->
+<div class="sticky-head">
 <div class="topbar">
   <div class="topbar-left">
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> <span><?= $locationName ? h($locationName) : 'Склад' ?></span>
@@ -1713,6 +1758,17 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
   </button>
   <div class="topbar-right" id="hTotal">0.00 €</div>
 </div>
+<!-- Лепкава лента: чакаща (незаписана) продажба -->
+<div class="pending-bar" id="pendingBar">
+  <div class="pb-info">
+    <span class="pb-badge"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg> <span id="pbCount">0</span></span>
+    <span class="pb-total" id="pbTotal">0.00 €</span>
+  </div>
+  <button type="button" class="pb-btn" id="pbBtn" onclick="pendingSave()">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши</span>
+  </button>
+</div>
+</div><!-- /sticky-head -->
 
 <!-- ═══ ГЛАВЕН WORK BOX ═══ -->
 <div class="sbox">
@@ -1914,6 +1970,10 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
   <div class="fs-bar">
     <div id="fsTitle" style="font-size:15px;font-weight:900;color:var(--text)">Обобщение</div>
     <button class="fs-close" onclick="closeFullscreen()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg><span>Назад</span></button>
+  </div>
+  <div class="fs-search-wrap">
+    <input id="fsSearch" class="fs-search-input" type="text" inputmode="search" placeholder="🔍 Търси по код, марка или цена…" autocomplete="off" oninput="renderFullscreen()">
+    <button type="button" class="fs-search-clear" id="fsSearchClear" onclick="fsClearSearch()" aria-label="Изчисти">✕</button>
   </div>
   <div class="fs-body" id="fsBody">
     <div class="fs-no-data">Зареждане...</div>
@@ -2570,6 +2630,7 @@ function render(){
   const hasNormal  = items.some(i => i.qty > 0);
   saveBtn.disabled = items.length === 0;
   if(saveBtnTop) saveBtnTop.disabled = items.length === 0;
+  updatePendingBar();
   if(hasReturns && !hasNormal) saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg><span>Запиши връщането</span>';
   else if(hasReturns && hasNormal) saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши (смесено)</span>';
   else saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Запиши продажбата</span>';
@@ -2598,6 +2659,30 @@ function render(){
   }).join('');
 }
 window.delItem = id => { items=items.filter(i=>i.id!==id); render(); updateTotals(); };
+
+/* ── Лепкава лента: чакаща (незаписана) продажба ── */
+function updatePendingBar(){
+  const bar = document.getElementById('pendingBar');
+  if(!bar) return;
+  const n = items.length;
+  if(!n){ bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  const cntEl = document.getElementById('pbCount');
+  const totEl = document.getElementById('pbTotal');
+  const htEl  = document.getElementById('hTotal');
+  if(cntEl) cntEl.textContent = n;
+  if(totEl && htEl) totEl.textContent = htEl.textContent;
+  const hasReturns = items.some(i=>i.qty<0);
+  const hasNormal  = items.some(i=>i.qty>0);
+  const lbl = document.querySelector('#pbBtn span');
+  if(lbl) lbl.textContent = (hasReturns && !hasNormal) ? 'Запиши връщане' : 'Запиши';
+}
+function pendingSave(){
+  if(!items.length) return;
+  /* Бутонът #saveBtn е скрит със CSS, но click-handler-ът пази цялата логика по записа */
+  if(saveBtn && !saveBtn.disabled) saveBtn.click();
+}
+window.pendingSave = pendingSave;
 
 /* ── Тоталне — FIX_VOUCHER_AUTO_APPLY_v1 ── */
 let voucherAppliedAmount = 0; /* колко € е свалил ваучерът (за save handler) */
@@ -2706,6 +2791,8 @@ function updateTotals(){
       }
     }
   } catch(e) {}
+
+  try { updatePendingBar(); } catch(e){}
 }
 
 /* ── Запиши продажба ── */
@@ -2873,12 +2960,32 @@ async function loadHistory(){
 /* ══ FULLSCREEN ОБОБЩЕНИЕ ══ */
 function openFullscreen(){
   document.getElementById('fsOverlay').classList.remove('hidden');
+  const inp = document.getElementById('fsSearch');
+  if(inp) inp.value = '';
   renderFullscreen();
 }
 function closeFullscreen(){
   document.getElementById('fsOverlay').classList.add('hidden');
 }
 window.closeFullscreen = closeFullscreen;
+
+/* ── Търсачка в обобщението ── */
+function fsMatch(code, brand, price, q){
+  if(!q) return true;
+  const hay = (String(code||'')+' '+String(brand||'')).toLowerCase();
+  if(hay.indexOf(q) !== -1) return true;
+  const qp = q.replace(',', '.');
+  const p = parseFloat(price);
+  if(!isNaN(p) && (String(p).indexOf(qp) !== -1 || p.toFixed(2).indexOf(qp) !== -1)) return true;
+  return false;
+}
+function fsClearSearch(){
+  const inp = document.getElementById('fsSearch');
+  if(inp) inp.value = '';
+  renderFullscreen();
+  if(inp) inp.focus();
+}
+window.fsClearSearch = fsClearSearch;
 
 function renderFullscreen(){
   const body  = document.getElementById('fsBody');
@@ -2888,6 +2995,10 @@ function renderFullscreen(){
   let dateLabel='Днес';
   document.querySelectorAll('.day-tab').forEach(t=>{ if(t.classList.contains('active')) dateLabel=t.textContent; });
   title.innerHTML = '<span style="display:inline-flex;align-items:center;gap:6px"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg> ' + dateLabel + '</span>';
+
+  const fsQ = (document.getElementById('fsSearch') ? document.getElementById('fsSearch').value : '').trim().toLowerCase();
+  const fsClr = document.getElementById('fsSearchClear');
+  if(fsClr) fsClr.classList.toggle('show', fsQ.length > 0);
 
   if(!_histData || !_histData.count){
     body.innerHTML = '<div class="fs-no-data">Няма продажби за този ден</div>';
@@ -2899,16 +3010,19 @@ function renderFullscreen(){
 
   let html = '';
 
-  // ── Обобщение артикули ──
-  if(data.day_items && data.day_items.length){
+  // ── Обобщение артикули (филтрирани при търсене) ──
+  const fsItems = (data.day_items || []).filter(it => fsMatch(it.code, it.brand, it.price, fsQ));
+  if(fsItems.length){
     html += `<div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:var(--gold);padding-bottom:8px;margin-bottom:4px;border-bottom:2px solid hsl(var(--hue2) 20% 18%);display:flex;align-items:center;gap:6px">
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg> <span>Артикули за деня — ${data.count} продажби</span>
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg> <span>${fsQ ? ('Намерени артикули — '+fsItems.length) : ('Артикули за деня — '+data.count+' продажби')}</span>
     </div>`;
 
-    data.day_items.forEach(item => {
+    let fsQty = 0, fsGross = 0;
+    fsItems.forEach(item => {
       const code  = item.code  || '—';
       const brand = item.brand || '';
       const total = parseFloat(item.line_base||0);
+      fsQty += parseInt(item.qty||0); fsGross += total;
       html += `<div class="fs-item-row">
         <div class="fs-item-left">
           <div class="fs-item-code">${esc(code)}</div>
@@ -2923,30 +3037,44 @@ function renderFullscreen(){
     });
 
     // Тоталне
-    html += `<div class="fs-totals">
-      <div class="fs-tot-row">
-        <span class="fs-tot-label">Общо без отстъпка</span>
-        <span class="fs-tot-value">${data.day_gross.toFixed(2)} €</span>
-      </div>
-      <div class="fs-tot-row">
-        <span class="fs-tot-label">Реално взето</span>
-        <span class="fs-tot-value">${data.day_final.toFixed(2)} €</span>
-      </div>
-      <div class="fs-tot-row">
-        <span class="fs-tot-label" style="font-weight:900">Обща отстъпка</span>
-        <span class="fs-tot-value big">−${data.day_discount.toFixed(2)} € (${discPct}%)</span>
-      </div>
-    </div>`;
+    if(fsQ){
+      html += `<div class="fs-totals">
+        <div class="fs-tot-row">
+          <span class="fs-tot-label">Бройки (намерени)</span>
+          <span class="fs-tot-value">${fsQty}</span>
+        </div>
+        <div class="fs-tot-row">
+          <span class="fs-tot-label" style="font-weight:900">Оборот (намерени)</span>
+          <span class="fs-tot-value big">${fsGross.toFixed(2)} €</span>
+        </div>
+      </div>`;
+    } else {
+      html += `<div class="fs-totals">
+        <div class="fs-tot-row">
+          <span class="fs-tot-label">Общо без отстъпка</span>
+          <span class="fs-tot-value">${data.day_gross.toFixed(2)} €</span>
+        </div>
+        <div class="fs-tot-row">
+          <span class="fs-tot-label">Реално взето</span>
+          <span class="fs-tot-value">${data.day_final.toFixed(2)} €</span>
+        </div>
+        <div class="fs-tot-row">
+          <span class="fs-tot-label" style="font-weight:900">Обща отстъпка</span>
+          <span class="fs-tot-value big">−${data.day_discount.toFixed(2)} € (${discPct}%)</span>
+        </div>
+      </div>`;
+    }
   } else {
-    html += '<div class="fs-no-data">Няма артикули — използвай + Добави при въвеждане</div>';
+    html += '<div class="fs-no-data">'+(fsQ ? ('Няма артикул за «'+esc(fsQ)+'»') : 'Няма артикули — използвай + Добави при въвеждане')+'</div>';
   }
 
-  // ── Всяка продажба поотделно ──
-  if(data.sales && data.sales.length){
+  // ── Всяка продажба поотделно (филтрирани при търсене) ──
+  const fsSales = (data.sales || []).filter(s => !fsQ || (s.items||[]).some(it => fsMatch(it.code, it.brand, it.price, fsQ)));
+  if(fsSales.length){
     html += `<div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);padding:16px 0 8px;margin-top:8px;border-top:2px solid var(--border2)">
-      Продажби по час
+      ${fsQ ? ('Продажби с «'+esc(fsQ)+'» — '+fsSales.length) : 'Продажби по час'}
     </div>`;
-    data.sales.forEach(sale => {
+    fsSales.forEach(sale => {
       const isReturn = sale.final < 0;
       html += `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border2);${isReturn?'background:#fff5f5;border-radius:8px;padding:8px;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -2960,13 +3088,16 @@ function renderFullscreen(){
         </div>`;
       sale.items.forEach(it => {
         const name = [it.code, it.brand].filter(Boolean).join(' · ');
+        const hit = fsQ && fsMatch(it.code, it.brand, it.price, fsQ);
         html += `<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">
-          <span style="font-weight:700;color:var(--text2)">${esc(name)}</span>
+          <span style="font-weight:700;color:var(--text2)"${hit?' class="fs-hit"':''}>${esc(name)}</span>
           <span style="font-weight:900">×${it.qty} · ${parseFloat(it.price).toFixed(2)} €${it.disc>0?' (−'+it.disc+'%)':''}</span>
         </div>`;
       });
       html += '</div>';
     });
+  } else if(fsQ){
+    html += '<div class="fs-no-data" style="margin-top:8px">Няма продажба съдържаща «'+esc(fsQ)+'»</div>';
   }
 
   body.innerHTML = html;
