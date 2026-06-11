@@ -794,7 +794,12 @@ body::before{
   font-size:9px;font-weight:800;padding:3px 8px;border-radius:5px;
   background:rgba(232,184,0,.15);color:var(--gold);letter-spacing:.5px;
 }
-.card-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.card-actions{display:grid;grid-template-columns:1fr auto;gap:8px}
+.card-btn.card-btn-mini{
+  height:48px;padding:0 14px;font-size:12px;font-weight:800;
+  background:transparent;border:1px dashed var(--border2);color:var(--text2);
+}
+.card-btn.card-btn-mini:hover{background:rgba(99,102,241,.08)}
 .card-btn{
   height:48px;border-radius:12px;
   border:1px solid var(--border2);
@@ -1659,15 +1664,24 @@ body.return-mode .sbox{
 .topbar-left{flex-shrink:0;font-size:13px !important}
 .tb-card-pill{
   flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
-  padding:6px 10px;border:1px solid rgba(99,102,241,.4);border-radius:999px;
-  background:rgba(99,102,241,.08);color:#a5b4fc;
-  font:800 11px/1 'Montserrat',sans-serif;cursor:pointer;
+  padding:8px 10px;border:none;border-radius:999px;
+  background:linear-gradient(135deg,#6366f1,#818cf8);color:#fff;
+  font:900 11.5px/1 'Montserrat',sans-serif;letter-spacing:.3px;cursor:pointer;
   -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  box-shadow:0 3px 12px rgba(99,102,241,.4);
+  animation:pillIdle 2.4s ease-in-out infinite;
 }
-.tb-card-pill:active{background:rgba(99,102,241,.2)}
+@keyframes pillIdle{0%,100%{box-shadow:0 3px 12px rgba(99,102,241,.35)}50%{box-shadow:0 3px 18px rgba(99,102,241,.65)}}
+.tb-card-pill:active{transform:scale(.96)}
 .tb-card-pill.has-card{
-  background:linear-gradient(135deg,rgba(34,197,94,.2),rgba(34,197,94,.1));
-  border-color:rgba(34,197,94,.5);color:#4ade80;
+  background:linear-gradient(120deg,#15803d,#22c55e,#4ade80,#22c55e);
+  background-size:240% 100%;color:#fff;
+  box-shadow:0 4px 18px rgba(34,197,94,.55);
+  animation:pillCard 2.2s ease-in-out infinite;
+}
+@keyframes pillCard{
+  0%,100%{box-shadow:0 4px 16px rgba(34,197,94,.45);background-position:0% 50%}
+  50%{box-shadow:0 6px 26px rgba(34,197,94,.85);background-position:100% 50%}
 }
 .topbar-right{flex-shrink:0}
 
@@ -1761,7 +1775,7 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
   <!-- S6: малка карта pill в header -->
   <button type="button" class="tb-card-pill" id="tbCardPill" onclick="toggleCardSection()" title="Лоялна карта">
     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-    <span id="tbCardLabel">Карта</span>
+    <span id="tbCardLabel">Сканирай</span>
   </button>
   <div class="topbar-right" id="hTotal">0.00 €</div>
 </div>
@@ -1795,8 +1809,8 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
       <div class="card-head-tag">опционално</div>
     </div>
     <div class="card-actions">
-      <button type="button" class="card-btn" onclick="toggleScan()" id="scanBtn"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg><span>Сканирай</span></button>
-      <button type="button" class="card-btn" onclick="toggleManual()" id="manualBtn"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></svg><span>Въведи ръчно</span></button>
+      <button type="button" class="card-btn active" onclick="toggleScan()" id="scanBtn"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg><span>Сканирай карта</span></button>
+      <button type="button" class="card-btn card-btn-mini" onclick="toggleManual()" id="manualBtn" title="Въведи ръчно"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></svg><span>Ръчно</span></button>
     </div>
     <div class="qr-expanded" id="qrExpanded">
       <button type="button" class="qr-close-btn" onclick="closeScan()" aria-label="Затвори камерата">
@@ -2919,7 +2933,7 @@ saveBtn.addEventListener('click', async () => {
       const _tbPill = document.getElementById('tbCardPill');
       if(_tbPill) _tbPill.classList.remove('has-card');
       const _tbLbl  = document.getElementById('tbCardLabel');
-      if(_tbLbl) _tbLbl.textContent = 'Карта';
+      if(_tbLbl) _tbLbl.textContent = 'Сканирай';
       if(typeof lastScan !== 'undefined') { lastScan = ''; lastScanTs = 0; }
       window._chosenVoucherId = null;
       givenAmount='';
@@ -3581,7 +3595,7 @@ function clearCardVisual(){
   const tbPill = document.getElementById('tbCardPill');
   const tbLbl = document.getElementById('tbCardLabel');
   if(tbPill) tbPill.classList.remove('has-card');
-  if(tbLbl) tbLbl.textContent = 'Карта';
+  if(tbLbl) tbLbl.textContent = 'Сканирай';
   if(typeof saveSessionState === 'function') saveSessionState();
 }
 window.clearCardVisual = clearCardVisual;
@@ -3590,10 +3604,17 @@ window.clearCardVisual = clearCardVisual;
 window.toggleCardSection = function(){
   const sec = document.getElementById('cardSection');
   if(!sec) return;
-  sec.classList.toggle('open');
-  /* Auto-scroll до cardSection ако отваряме */
-  if(sec.classList.contains('open')){
-    setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+  const willOpen = !sec.classList.contains('open');
+  sec.classList.toggle('open', willOpen);
+  if(willOpen){
+    /* директно пускаме камерата — без излишни стъпки */
+    try { toggleScan(); } catch(e){}
+    setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
+  } else {
+    /* затваряме секцията → спираме камерата */
+    try { if(typeof stopQr === 'function') stopQr(); } catch(e){}
+    const qr = document.getElementById('qrExpanded'); if(qr) qr.classList.add('hidden');
+    const sbtn = document.getElementById('scanBtn'); if(sbtn) sbtn.classList.remove('active');
   }
 };
 const _cardInputEl=document.getElementById('cardInput');
