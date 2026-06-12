@@ -3,6 +3,15 @@ require "config.php";
 $incomingRef = trim($_GET["ref"] ?? "");
 $source      = trim($_GET["source"] ?? "");
 
+/* ── Self-heal: увери се, че колоните за магазина на регистрация съществуват ──
+   (ако миграцията не е пускана на живо, картите се записваха „без магазин") */
+try {
+    try { $pdo->query("SELECT reg_location_id FROM customers LIMIT 0"); }
+    catch (Throwable $e) { $pdo->exec("ALTER TABLE customers ADD COLUMN reg_location_id INT NULL DEFAULT NULL"); }
+    try { $pdo->query("SELECT reg_location_name FROM customers LIMIT 0"); }
+    catch (Throwable $e) { $pdo->exec("ALTER TABLE customers ADD COLUMN reg_location_name VARCHAR(100) NULL DEFAULT NULL"); }
+} catch (Throwable $e) { /* липсва ALTER право — пропускаме тихо */ }
+
 /* Обекти за селектора „в кой магазин е направена картата" */
 $regLocations = [];
 try { $regLocations = $pdo->query("SELECT id, name FROM locations ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
