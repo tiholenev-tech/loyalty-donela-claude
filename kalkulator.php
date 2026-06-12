@@ -548,6 +548,13 @@ if ($ajax === 'update_sale' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 /* ══════════════════════════════════════════════════════
    AJAX: Класация — лоялни карти по магазин за месеца (награда 50€)
    ══════════════════════════════════════════════════════ */
+if (!function_exists('lbColExists')) {
+    function lbColExists(PDO $pdo, string $table, string $col): bool {
+        try { $pdo->query("SELECT `$col` FROM `$table` LIMIT 0"); return true; }
+        catch (Throwable $e) { return false; }
+    }
+}
+
 if ($ajax === 'cards_leaderboard') {
     try {
         $tz   = new DateTimeZone('Europe/Sofia');
@@ -556,18 +563,41 @@ if ($ajax === 'cards_leaderboard') {
         $to   = $now->format('Y-m-t 23:59:59');
         $today= $now->format('Y-m-d 00:00:00');
 
+        $hasDel = lbColExists($pdo, 'customers', 'deleted_at');
+        $hasReg = lbColExists($pdo, 'customers', 'reg_location_id');
+        $delCond = $hasDel ? 'AND deleted_at IS NULL' : '';
+
         $rows = [];
+        $err  = null;
         try {
-            $rs = $pdo->prepare("SELECT COALESCE(NULLIF(reg_location_name,''),'— без магазин —') loc,
-                                        reg_location_id rid, COUNT(*) cnt,
-                                        SUM(CASE WHEN created_at >= :today THEN 1 ELSE 0 END) today_cnt
-                FROM customers
-                WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to
-                GROUP BY reg_location_id, reg_location_name
-                ORDER BY cnt DESC, loc ASC");
+            if ($hasReg) {
+                $rs = $pdo->prepare("SELECT COALESCE(NULLIF(reg_location_name,''),'— без магазин —') loc,
+                                            reg_location_id rid, COUNT(*) cnt,
+                                            SUM(CASE WHEN created_at >= :today THEN 1 ELSE 0 END) today_cnt
+                    FROM customers
+                    WHERE created_at BETWEEN :from AND :to $delCond
+                    GROUP BY reg_location_id, reg_location_name
+                    ORDER BY cnt DESC, loc ASC");
+            } else {
+                /* няма колони за магазин → всичко в едно ведро */
+                $rs = $pdo->prepare("SELECT '— без магазин —' loc, 0 rid, COUNT(*) cnt,
+                                            SUM(CASE WHEN created_at >= :today THEN 1 ELSE 0 END) today_cnt
+                    FROM customers
+                    WHERE created_at BETWEEN :from AND :to $delCond
+                    HAVING cnt > 0");
+            }
             $rs->execute(['from'=>$from, 'to'=>$to, 'today'=>$today]);
             $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Throwable $e) { $rows = []; }
+        } catch (Throwable $e) { $rows = []; $err = $e->getMessage(); }
+
+        /* Диагностика: общо нови карти този месец + изобщо (независимо от reg колоните) */
+        $monthTotal = 0; $allTime = 0;
+        try {
+            $mt = $pdo->prepare("SELECT COUNT(*) FROM customers WHERE created_at BETWEEN :from AND :to $delCond");
+            $mt->execute(['from'=>$from, 'to'=>$to]);
+            $monthTotal = (int)$mt->fetchColumn();
+            $allTime = (int)$pdo->query("SELECT COUNT(*) FROM customers" . ($hasDel ? " WHERE deleted_at IS NULL" : ""))->fetchColumn();
+        } catch (Throwable $e) {}
 
         $total = 0;
         foreach ($rows as $r) $total += (int)$r['cnt'];
@@ -576,11 +606,15 @@ if ($ajax === 'cards_leaderboard') {
             'ok'          => true,
             'rows'        => $rows,
             'total'       => $total,
+            'month_total' => $monthTotal,
+            'all_time'    => $allTime,
+            'has_reg'     => $hasReg,
             'month_label' => $now->format('m.Y'),
             'today_date'  => $now->format('Y-m-d'),
             'my_loc_id'   => $locationId,
             'my_loc_name' => $locationName,
             'prize'       => 50,
+            'err'         => $err,
         ]);
     } catch (Throwable $e) {
         jsonOut(['ok'=>false, 'error'=>$e->getMessage()]);
@@ -599,7 +633,13 @@ if ($ajax === 'cards_detail') {
         $ridRaw = $_GET['rid'] ?? '';
         $params = ['from'=>$from, 'to'=>$to];
 
-        if ($ridRaw === '' || (int)$ridRaw <= 0) {
+        $hasDel = lbColExists($pdo, 'customers', 'deleted_at');
+        $hasReg = lbColExists($pdo, 'customers', 'reg_location_id');
+        $delCond = $hasDel ? 'AND c.deleted_at IS NULL' : '';
+
+        if (!$hasReg) {
+            $cond = '1=1';
+        } elseif ($ridRaw === '' || (int)$ridRaw <= 0) {
             $cond = "(c.reg_location_id IS NULL OR c.reg_location_id = 0)";
         } else {
             $cond = "c.reg_location_id = :rid";
@@ -613,7 +653,7 @@ if ($ajax === 'cards_detail') {
                                         c.created_at
                 FROM customers c
                 LEFT JOIN loyalty_cards lc ON lc.customer_id = c.id
-                WHERE c.deleted_at IS NULL AND c.created_at BETWEEN :from AND :to AND $cond
+                WHERE c.created_at BETWEEN :from AND :to $delCond AND $cond
                 ORDER BY c.created_at DESC");
             $rs->execute($params);
             $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
@@ -3356,7 +3396,15 @@ function renderLeaderboard(d){
   const foot = document.getElementById('lbFoot');
   const rows = d.rows || [];
   if(!rows.length){
-    list.innerHTML = '<div class="lb-empty">Още няма направени карти този месец — бъди първи! 🚀</div>';
+    const mt = parseInt(d.month_total)||0;
+    const at = parseInt(d.all_time)||0;
+    let msg = 'Още няма направени карти този месец — бъди първи! 🚀';
+    if(mt > 0){
+      msg = 'Има <b>'+mt+'</b> нови карти този месец, но не се групират по магазин — прати скрийншот, има нещо за оправяне.';
+    } else if(at > 0){
+      msg = 'Няма направени карти този <b>месец</b>.<br>Общо до момента: <b>'+at+'</b> карти.';
+    }
+    list.innerHTML = '<div class="lb-empty">'+msg+'</div>';
     if(foot) foot.textContent = '';
     return;
   }
