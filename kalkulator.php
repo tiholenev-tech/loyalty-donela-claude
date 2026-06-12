@@ -554,16 +554,18 @@ if ($ajax === 'cards_leaderboard') {
         $now  = new DateTime('now', $tz);
         $from = $now->format('Y-m-01 00:00:00');
         $to   = $now->format('Y-m-t 23:59:59');
+        $today= $now->format('Y-m-d 00:00:00');
 
         $rows = [];
         try {
             $rs = $pdo->prepare("SELECT COALESCE(NULLIF(reg_location_name,''),'— без магазин —') loc,
-                                        reg_location_id rid, COUNT(*) cnt
+                                        reg_location_id rid, COUNT(*) cnt,
+                                        SUM(CASE WHEN created_at >= :today THEN 1 ELSE 0 END) today_cnt
                 FROM customers
                 WHERE deleted_at IS NULL AND created_at BETWEEN :from AND :to
                 GROUP BY reg_location_id, reg_location_name
                 ORDER BY cnt DESC, loc ASC");
-            $rs->execute(['from'=>$from, 'to'=>$to]);
+            $rs->execute(['from'=>$from, 'to'=>$to, 'today'=>$today]);
             $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) { $rows = []; }
 
@@ -575,9 +577,53 @@ if ($ajax === 'cards_leaderboard') {
             'rows'        => $rows,
             'total'       => $total,
             'month_label' => $now->format('m.Y'),
+            'today_date'  => $now->format('Y-m-d'),
             'my_loc_id'   => $locationId,
             'my_loc_name' => $locationName,
             'prize'       => 50,
+        ]);
+    } catch (Throwable $e) {
+        jsonOut(['ok'=>false, 'error'=>$e->getMessage()]);
+    }
+}
+
+/* ══════════════════════════════════════════════════════
+   AJAX: Кои нови карти са направени в даден магазин този месец
+   ══════════════════════════════════════════════════════ */
+if ($ajax === 'cards_detail') {
+    try {
+        $tz    = new DateTimeZone('Europe/Sofia');
+        $now   = new DateTime('now', $tz);
+        $from  = $now->format('Y-m-01 00:00:00');
+        $to    = $now->format('Y-m-t 23:59:59');
+        $ridRaw = $_GET['rid'] ?? '';
+        $params = ['from'=>$from, 'to'=>$to];
+
+        if ($ridRaw === '' || (int)$ridRaw <= 0) {
+            $cond = "(c.reg_location_id IS NULL OR c.reg_location_id = 0)";
+        } else {
+            $cond = "c.reg_location_id = :rid";
+            $params['rid'] = (int)$ridRaw;
+        }
+
+        $rows = [];
+        try {
+            $rs = $pdo->prepare("SELECT lc.card_number,
+                                        TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))) name,
+                                        c.created_at
+                FROM customers c
+                LEFT JOIN loyalty_cards lc ON lc.customer_id = c.id
+                WHERE c.deleted_at IS NULL AND c.created_at BETWEEN :from AND :to AND $cond
+                ORDER BY c.created_at DESC");
+            $rs->execute($params);
+            $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $rows = []; }
+
+        jsonOut([
+            'ok'         => true,
+            'rows'       => $rows,
+            'count'      => count($rows),
+            'today_date' => $now->format('Y-m-d'),
         ]);
     } catch (Throwable $e) {
         jsonOut(['ok'=>false, 'error'=>$e->getMessage()]);
@@ -1242,6 +1288,26 @@ body::before{
 .lb-win{flex-shrink:0;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:linear-gradient(135deg,#E8B800,#f59e0b);color:#1a1205}
 .lb-foot{margin-top:11px;padding-top:10px;border-top:1px solid var(--border2);font-size:12.5px;font-weight:800;color:var(--text2);text-align:center;line-height:1.4}
 .lb-foot b{color:var(--gold)}
+.lb-row{cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.lb-row:active{filter:brightness(1.15)}
+.lb-today{flex-shrink:0;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:rgba(34,197,94,.25);color:#86efac}
+
+/* ═══ МОДАЛ: карти по магазин ═══ */
+.sc-overlay{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:flex-end;justify-content:center}
+.sc-overlay.hidden{display:none}
+.sc-box{width:100%;max-width:520px;max-height:82vh;background:#0f172a;border:1px solid var(--border2);border-bottom:none;border-radius:18px 18px 0 0;display:flex;flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.6)}
+.sc-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.sc-title{font:900 15px/1.2 'Montserrat',system-ui;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-sub{font-size:11.5px;font-weight:800;color:var(--text2);margin-top:2px}
+.sc-close{flex-shrink:0;width:34px;height:34px;border:none;border-radius:50%;background:rgba(248,113,113,.15);color:#f87171;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.sc-list{overflow-y:auto;padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:7px}
+.sc-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border-radius:11px;background:rgba(99,102,241,.06);border:1px solid var(--border)}
+.sc-row.sc-today{background:linear-gradient(135deg,rgba(34,197,94,.16),rgba(34,197,94,.04));border-color:rgba(34,197,94,.4)}
+.sc-card{font:900 16px/1 'Montserrat',system-ui;color:var(--text);letter-spacing:.5px;display:flex;align-items:center;gap:7px}
+.sc-badge{font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:rgba(34,197,94,.3);color:#86efac}
+.sc-meta{text-align:right;flex-shrink:0;display:flex;flex-direction:column;gap:2px}
+.sc-name{font-size:13px;font-weight:800;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
+.sc-date{font-size:11px;font-weight:700;color:var(--text3);font-variant-numeric:tabular-nums}
 
 /* ═══ SAVE BUTTON ═══ */
 .save-btn{
@@ -2082,6 +2148,22 @@ body.lp-keypad-open{padding-bottom:360px !important /* NUMPAD_BIGGER_v1 */}
   </div>
   <div class="fs-footer">
     <button class="fs-back-btn" onclick="closeFullscreen()"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg><span>Назад към калкулатора</span></button>
+  </div>
+</div>
+
+<!-- МОДАЛ: Кои карти са направени в магазина (детайли от класацията) -->
+<div class="sc-overlay hidden" id="shopCardsModal" onclick="if(event.target===this)closeShopCards()">
+  <div class="sc-box">
+    <div class="sc-head">
+      <div style="min-width:0">
+        <div class="sc-title" id="scTitle">Карти</div>
+        <div class="sc-sub" id="scSub"></div>
+      </div>
+      <button type="button" class="sc-close" onclick="closeShopCards()" aria-label="Затвори">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sc-list" id="scList"></div>
   </div>
 </div>
 
@@ -3254,6 +3336,7 @@ function renderFullscreen(){
 }
 
 /* ══ КЛАСАЦИЯ — лоялни карти за месеца (награда 50€) ══ */
+let _lbRows = [];
 async function loadLeaderboard(){
   const list = document.getElementById('lbList');
   if(!list) return;
@@ -3280,13 +3363,15 @@ function renderLeaderboard(d){
   const myName = (d.my_loc_name || LOCATION_NAME || '').trim();
   const leader = rows[0];
   const medals = ['🥇','🥈','🥉'];
+  _lbRows = rows;
   list.innerHTML = rows.map((r,i)=>{
     const mine     = myName && r.loc === myName;
     const isLeader = i === 0 && (parseInt(r.cnt)||0) > 0;
     const rank     = medals[i] || (i+1)+'.';
-    return `<div class="lb-row${isLeader?' lb-leader':''}${mine?' lb-mine':''}">
+    const today    = parseInt(r.today_cnt)||0;
+    return `<div class="lb-row${isLeader?' lb-leader':''}${mine?' lb-mine':''}" onclick="showShopCards(${i})" title="Виж картите">
       <div class="lb-rank">${rank}</div>
-      <div class="lb-name">${esc(r.loc)}${mine?'<span class="lb-tag">твоят</span>':''}${isLeader?'<span class="lb-win">печели 50€</span>':''}</div>
+      <div class="lb-name">${esc(r.loc)}${mine?'<span class="lb-tag">твоят</span>':''}${isLeader?'<span class="lb-win">печели 50€</span>':''}${today>0?'<span class="lb-today">+'+today+' днес</span>':''}</div>
       <div class="lb-cnt">${r.cnt}<small>карти</small></div>
     </div>`;
   }).join('');
@@ -3303,6 +3388,44 @@ function renderLeaderboard(d){
   }
 }
 window.loadLeaderboard = loadLeaderboard;
+
+/* ── Кои карти са направени в даден магазин (детайли от класацията) ── */
+async function showShopCards(idx){
+  const r = _lbRows[idx];
+  if(!r) return;
+  const modal = document.getElementById('shopCardsModal');
+  const list  = document.getElementById('scList');
+  const title = document.getElementById('scTitle');
+  const sub   = document.getElementById('scSub');
+  if(title) title.textContent = r.loc || 'Карти';
+  if(sub)   sub.textContent   = r.cnt + ' карти този месец' + ((parseInt(r.today_cnt)||0)>0 ? ' · +'+r.today_cnt+' днес' : '');
+  if(list)  list.innerHTML    = '<div class="lb-empty">Зареждане…</div>';
+  if(modal) modal.classList.remove('hidden');
+  try{
+    const url = new URL(PAGE_URL);
+    url.searchParams.set('ajax','cards_detail');
+    url.searchParams.set('rid', (r.rid==null?'':r.rid));
+    url.searchParams.set('_ts', Date.now());
+    const res = await fetch(url, {cache:'no-store'});
+    const d = await res.json();
+    if(!d || !d.ok){ list.innerHTML = '<div class="lb-empty">Грешка при зареждане</div>'; return; }
+    if(!d.rows.length){ list.innerHTML = '<div class="lb-empty">Няма направени карти този месец</div>'; return; }
+    const today = d.today_date;
+    list.innerHTML = d.rows.map(c=>{
+      const raw  = String(c.created_at||'');
+      const isToday = raw.slice(0,10) === today;
+      let dstr = raw;
+      try{ const dt=new Date(raw.replace(' ','T')); dstr = dt.toLocaleDateString('bg-BG')+' '+dt.toLocaleTimeString('bg-BG',{hour:'2-digit',minute:'2-digit'}); }catch(e){}
+      return `<div class="sc-row${isToday?' sc-today':''}">
+        <div class="sc-card">${esc(c.card_number||'—')}${isToday?'<span class="sc-badge">днес</span>':''}</div>
+        <div class="sc-meta"><span class="sc-name">${esc((c.name||'').trim()||'Клиент')}</span><span class="sc-date">${esc(dstr)}</span></div>
+      </div>`;
+    }).join('');
+  }catch(e){ if(list) list.innerHTML = '<div class="lb-empty">Няма връзка</div>'; }
+}
+window.showShopCards = showShopCards;
+function closeShopCards(){ const m=document.getElementById('shopCardsModal'); if(m) m.classList.add('hidden'); }
+window.closeShopCards = closeShopCards;
 
 /* ── Старт ── */
 syncQty(); syncDisc(); render(); updateTotals();
